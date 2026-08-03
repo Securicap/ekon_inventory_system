@@ -4,7 +4,11 @@
     "outDir": "./dist",
     "rootDir": "./src",
     // Referenced by backend/tsconfig.json as a project reference.
-    "composite": true
+    "composite": true,
+    // Keep the incremental cache inside the build output so `make clean`,
+    // which removes dist/, also removes it. Left at its default it lands at
+    // shared/tsconfig.tsbuildinfo and survives a clean, hiding stale types.
+    "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
   "include": ["src/**/*"]
 }

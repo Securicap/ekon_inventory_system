@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: CI only needs to read the checkout. Any job that later needs
+# more (e.g. publishing) should widen this at the job level, not here.
+permissions:
+  contents: read
+
 # A slow pipeline gets bypassed. Target: under five minutes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

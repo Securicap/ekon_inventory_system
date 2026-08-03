@@ -6,13 +6,23 @@ import { buildApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config/index.js';
 import { fixedClock } from '../../src/platform/clock/index.js';
 import { healthResponseSchema } from '@ekon/shared';
+import { loadMigrations } from '../../src/platform/db/migrator.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
 
 describe('GET /api/health', () => {
   let db: TestDatabase;
   let app: FastifyInstance;
+  let latestSchemaVersion: string;
 
   beforeAll(async () => {
+    // The test database is migrated to head, so health must report whatever the
+    // latest migration is. Deriving it here keeps this test from breaking when a
+    // future migration is added — it asserts the contract, not a fixed number.
+    const migrations = await loadMigrations();
+    const latest = migrations.at(-1)?.version;
+    if (!latest) throw new Error('No migrations found; cannot determine expected schema version');
+    latestSchemaVersion = latest;
+
     db = await createTestDatabase();
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent', APP_VERSION: 'test-build' },
@@ -36,7 +46,7 @@ describe('GET /api/health', () => {
     expect(body.status).toBe('ok');
     expect(body.database).toBe('up');
     expect(body.version).toBe('test-build');
-    expect(body.schemaVersion).toBe('0001');
+    expect(body.schemaVersion).toBe(latestSchemaVersion);
     expect(body.time).toBe('2026-08-02T12:00:00.000Z');
   });
 
