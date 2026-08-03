@@ -3,9 +3,6 @@ import { z } from 'zod';
 /** Header carrying the client-generated, retry-stable operation id. */
 export const OPERATION_ID_HEADER = 'x-ekon-operation-id';
 
-/** Header carrying the browser installation id, generated once and persisted. */
-export const DEVICE_ID_HEADER = 'x-ekon-device-id';
-
 /** Correlates a client-visible failure with a server log line. */
 export const REQUEST_ID_HEADER = 'x-request-id';
 

@@ -100,8 +100,8 @@ async function postMovement(chain: Chain, fields: MovementFields = {}): Promise<
        id, variant_id, location_id, movement_type,
        quantity_delta, quantity_before, quantity_after,
        previous_movement_id, reverses_movement_id, operation_id,
-       reason_code, note, user_id, device_id, occurred_at, recorded_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)`,
+       reason_code, note, user_id, occurred_at, recorded_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)`,
     [
       id,
       chain.variantId,
@@ -116,7 +116,6 @@ async function postMovement(chain: Chain, fields: MovementFields = {}): Promise<
       fields.reasonCode ?? null,
       fields.note ?? null,
       newId(), // user_id — no foreign key until identity exists
-      newId(), // device_id
       NOW,
     ],
   );

@@ -49,7 +49,6 @@ export interface PostedMovement {
   reasonCode: string | null;
   note: string | null;
   userId: string;
-  deviceId: string;
   occurredAt: Date;
   recordedAt: Date;
 }
@@ -82,7 +81,6 @@ interface MovementRow {
   reason_code: string | null;
   note: string | null;
   user_id: string;
-  device_id: string;
   occurred_at: Date;
   recorded_at: Date;
 }
@@ -112,7 +110,6 @@ export interface InsertMovementParams {
   reasonCode: string | null;
   note: string | null;
   userId: string;
-  deviceId: string;
   occurredAt: Date;
   recordedAt: Date;
 }
@@ -284,12 +281,12 @@ export async function insertMovement(
        id, variant_id, location_id, movement_type,
        quantity_delta, quantity_before, quantity_after,
        previous_movement_id, reverses_movement_id, operation_id,
-       reason_code, note, user_id, device_id, occurred_at, recorded_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $12, $13, $14, $15)
+       reason_code, note, user_id, occurred_at, recorded_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, $12, $13, $14)
      RETURNING id, variant_id, location_id, movement_type,
                quantity_delta, quantity_before, quantity_after,
                previous_movement_id, reverses_movement_id, operation_id,
-               reason_code, note, user_id, device_id, occurred_at, recorded_at`,
+               reason_code, note, user_id, occurred_at, recorded_at`,
     [
       params.id,
       params.variantId,
@@ -303,7 +300,6 @@ export async function insertMovement(
       params.reasonCode,
       params.note,
       params.userId,
-      params.deviceId,
       params.occurredAt,
       params.recordedAt,
     ],
@@ -323,7 +319,7 @@ export async function getMovementById(
     `SELECT id, variant_id, location_id, movement_type,
             quantity_delta, quantity_before, quantity_after,
             previous_movement_id, reverses_movement_id, operation_id,
-            reason_code, note, user_id, device_id, occurred_at, recorded_at
+            reason_code, note, user_id, occurred_at, recorded_at
        FROM inventory_movements
       WHERE id = $1`,
     [id],
@@ -361,7 +357,6 @@ function toMovement(row: MovementRow): PostedMovement {
     reasonCode: row.reason_code,
     note: row.note,
     userId: row.user_id,
-    deviceId: row.device_id,
     occurredAt: row.occurred_at,
     recordedAt: row.recorded_at,
   };

@@ -134,8 +134,14 @@ _Enforcement:_ `integer` columns, and `scripts/check-conventions.mjs` rejects
 
 ## INV-11 — Every movement is fully attributable
 
-`user_id`, `device_id`, `operation_id`, `occurred_at`, `recorded_at` are all
-`NOT NULL`. `reason_code` is required for adjustments.
+`user_id`, `operation_id`, `occurred_at`, and `recorded_at` are all `NOT NULL`.
+`reason_code` is required for adjustments.
+
+Attribution is to the person, not the machine. There is deliberately no device,
+terminal, session, IP, or user-agent column on a movement: an employee signs in
+from whichever computer is free, and which one that was answers no question
+about stock. Request metadata belongs in audit and security logging. See ADR 9,
+which supersedes that part of ADR 6.
 
 _Enforcement:_ `NOT NULL` constraints plus
 `CHECK (movement_type NOT IN ('ADJUSTMENT_IN','ADJUSTMENT_OUT') OR reason_code IS NOT NULL)`

@@ -88,7 +88,6 @@ function command(chain: Chain, overrides: Partial<PostMovementCommand> = {}): Po
     reasonCode: null,
     note: null,
     userId: newId(),
-    deviceId: newId(),
     occurredAt: OCCURRED_AT,
     recordedAt: RECORDED_AT,
     ...overrides,

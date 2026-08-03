@@ -76,7 +76,9 @@ server assigns its chain position at ingestion. See `docs/07-decisions/0004`.
 
 1. The browser generates an `operation_id` when the form opens and mirrors the
    form to `localStorage`.
-2. `POST /api/...` carries `x-ekon-operation-id` and `x-ekon-device-id`.
+2. `POST /api/...` carries `x-ekon-operation-id`. The request identifies the
+   command, and the session cookie identifies the user — nothing identifies
+   the machine (ADR 9).
 3. The route resolves the session and checks a capability.
 4. One transaction opens. The `operations` row is inserted with
    `ON CONFLICT DO NOTHING`; a conflict means replay, and the stored result is

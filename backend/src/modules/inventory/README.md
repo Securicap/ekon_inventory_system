@@ -121,10 +121,12 @@ row-lock guarantees on one database — nothing about multi-node behaviour.
 - **Reversal shape.** A `REVERSAL` must name the movement it reverses; nothing
   else may name one; nothing reverses itself; and `UNIQUE (reverses_movement_id)`
   means one movement is reversed at most once (INV-2).
-- **Attribution.** `operation_id`, `user_id`, `device_id`, `occurred_at`, and
-  `recorded_at` are `NOT NULL`, and adjustments require a `reason_code`
-  (INV-11). `user_id` deliberately carries **no** foreign key until identity
-  exists — a key pointing at a fiction is worse than none.
+- **Attribution.** `operation_id`, `user_id`, `occurred_at`, and `recorded_at`
+  are `NOT NULL`, and adjustments require a `reason_code` (INV-11). `user_id`
+  deliberately carries **no** foreign key until identity exists — a key pointing
+  at a fiction is worse than none. Attribution is to the person, never to a
+  machine: there is no device, terminal, or session column, and none is coming
+  (ADR 9).
 - **Balances are a checked projection.** `PRIMARY KEY (variant_id, location_id)`,
   `quantity_on_hand >= 0`, a nonzero balance must name a last movement, and that
   pointer is a composite foreign key into the balance's own chain, so a balance

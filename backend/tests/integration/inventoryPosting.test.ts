@@ -75,7 +75,6 @@ function command(chain: Chain, overrides: Partial<PostMovementCommand> = {}): Po
     reasonCode: null,
     note: null,
     userId: newId(),
-    deviceId: newId(),
     occurredAt: OCCURRED_AT,
     recordedAt: RECORDED_AT,
     ...overrides,
@@ -579,7 +578,7 @@ describe('the returned movement', () => {
       `SELECT id, variant_id, location_id, movement_type,
               quantity_delta, quantity_before, quantity_after,
               previous_movement_id, reverses_movement_id, operation_id,
-              reason_code, note, user_id, device_id, occurred_at, recorded_at
+              reason_code, note, user_id, occurred_at, recorded_at
          FROM inventory_movements WHERE id = $1`,
       [input.movementId],
     );
@@ -599,7 +598,6 @@ describe('the returned movement', () => {
       reasonCode: row.reason_code,
       note: row.note,
       userId: row.user_id,
-      deviceId: row.device_id,
       occurredAt: row.occurred_at,
       recordedAt: row.recorded_at,
     });
