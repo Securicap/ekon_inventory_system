@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    // Referenced by backend/tsconfig.json as a project reference.
+    "composite": true
+  },
+  "include": ["src/**/*"]
+}

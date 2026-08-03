@@ -1,0 +1,28 @@
+# Local development database only.
+#
+# Production uses managed PostgreSQL from the hosting provider. Nothing in this
+# system runs in Docker in production, and nothing runs on the shop laptop — the
+# laptop is a browser client.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ekon-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ekon
+      POSTGRES_PASSWORD: ekon
+      POSTGRES_DB: ekon_dev
+      # Match production collation so ordering and citext behave identically.
+      POSTGRES_INITDB_ARGS: '--locale-provider=icu --icu-locale=en-US --encoding=UTF8'
+    ports:
+      - '5432:5432'
+    volumes:
+      - ekon-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ekon -d ekon_dev']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  ekon-pgdata:

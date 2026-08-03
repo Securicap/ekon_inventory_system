@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A slow pipeline gets bypassed. Target: under five minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  static:
+    name: Types, lint, conventions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace shared
+      - name: Type check
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Format check
+        run: npm run format:check
+      - name: Project conventions
+        # Append-only ledger, no float quantities, migration naming,
+        # no untranslated user-facing strings.
+        run: node scripts/check-conventions.mjs
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ekon
+          POSTGRES_PASSWORD: ekon
+          POSTGRES_DB: ekon_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ekon"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://ekon:ekon@localhost:5432/ekon_ci
+      NODE_ENV: test
+      LOG_LEVEL: silent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build --workspace shared
+
+      - name: Migrate an empty database to head
+        run: npm run migrate
+
+      - name: Migrations are idempotent
+        # Deploys re-run migrations on every release; a second run must apply
+        # nothing rather than failing or duplicating work.
+        run: |
+          output=$(npm run migrate --silent)
+          echo "$output"
+          echo "$output" | grep -q "up to date" || {
+            echo "::error::Re-running migrations was not a no-op"; exit 1; }
+
+      - name: Tests
+        run: npm run test
+
+  build:
+    name: Build and bundle budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Bundle budget
+        # The shop is on an unreliable connection. Keep the first paint cheap.
+        run: node scripts/check-bundle-size.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: backend/public
+          retention-days: 7

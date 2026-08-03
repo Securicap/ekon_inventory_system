@@ -1,0 +1,63 @@
+# Deployment
+
+## Shape
+
+One managed web service and one managed PostgreSQL database, in a US East
+region for latency to Haiti. Nothing runs in the shop.
+
+## Environments
+
+| Environment  | Purpose                                                                                  |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| `staging`    | Proves migrations against a copy of production's schema before real inventory is touched |
+| `production` | The business's records                                                                   |
+
+## Release procedure
+
+1. Merge to `main`. CI must be green.
+2. The platform builds: `npm ci && npm run build`.
+3. **Release command runs first, before the new instance takes traffic:**
+   `npm run migrate`. Each migration runs in its own transaction. A failure
+   aborts the deploy and the previous instance keeps serving.
+4. The new instance boots. If `EXPECTED_SCHEMA_VERSION` is set and does not
+   match the database, it refuses to start rather than serving requests against
+   a schema it does not understand.
+5. Verify: `curl https://<host>/api/health` should return `status: ok` with the
+   expected `schemaVersion` and `version`.
+
+## Environment variables
+
+Set in the platform's environment settings, never in a committed file. See
+`.env.example` for the full list. Production must set:
+
+- `DATABASE_URL` (from the managed database)
+- `DATABASE_SSL=true`
+- `NODE_ENV=production`
+- `EXPECTED_SCHEMA_VERSION` (the head migration for this build)
+- `APP_VERSION` (the commit sha)
+
+## Backups
+
+Two independent copies, because this is the business's only record of its
+inventory:
+
+1. The provider's automated daily backup with point-in-time recovery.
+2. A weekly `pg_dump` to S3-compatible object storage, in a different account.
+
+**A restore must be practised into staging before real inventory is entered, and
+at least once a year afterwards.** An untested backup is not a backup.
+
+## Rollback
+
+Application code rolls back by redeploying the previous build.
+
+Migrations do not roll back — there is no `down`. Because migrations are
+additive, the previous build almost always runs against the newer schema. If a
+migration must be undone, write a new forward migration.
+
+## What to check when something is wrong
+
+1. `/api/health` — is the database up, and at the expected schema version?
+2. Application logs — every response carries an `x-request-id`; a user reporting
+   a failure can read that code off the screen.
+3. Error monitoring — unhandled errors are reported with the same request id.

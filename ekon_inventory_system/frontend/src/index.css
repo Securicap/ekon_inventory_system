@@ -1,0 +1,28 @@
+@import 'tailwindcss';
+
+/*
+ * System font stack only — no web font downloads. The shop is on an unreliable
+ * connection and a font file is bytes that buy nothing.
+ */
+@theme {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  /* Minimum touch target for shop-counter use, including on a tablet. */
+  --spacing-touch: 3rem;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Numbers in inventory tables must line up so quantities can be scanned. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
