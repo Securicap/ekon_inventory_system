@@ -63,19 +63,27 @@ filtering, search, or sorting yet.
 ## Variant-signature normalization
 
 A variant's identity is its normalized attribute set, reduced to one
-deterministic `variant_signature`:
+deterministic `variant_signature`. Identity is **case-insensitive** on both
+names and values; the human-readable **display** value is kept separately.
 
 1. Attribute **names** are trimmed and lower-cased (`"Color"`, `" color "`, and
    `"COLOR"` are the same attribute).
-2. Attribute **values** are trimmed; case is preserved (`"White"` and `"white"`
-   are different values).
-3. Attributes are sorted by normalized name.
-4. The signature is the JSON of the sorted `[name, value]` pairs; JSON quoting
-   keeps the name/value boundary unambiguous.
+2. Attribute **values** are trimmed for display, with case **preserved** in
+   what is stored and returned — `" White "` is stored and returned as `"White"`.
+3. Attribute values are **case-insensitive for identity**: `"White"`, `"white"`,
+   and `" WHITE "` are the same variant. `"White"` and `"white"` therefore
+   cannot create two separate variants.
+4. Attributes are sorted by normalized name.
+5. The signature is the JSON of the sorted `[name, identityValue]` pairs — where
+   `identityValue` is the trimmed, **lower-cased** value; JSON quoting keeps the
+   name/value boundary unambiguous.
 
-The empty attribute set yields `[]` — the signature of a default variant. A
-`UNIQUE (product_id, variant_signature)` constraint makes the database, not just
-the application, reject a duplicate variant.
+Lower-casing uses ordinary Unicode (locale-independent) case mapping
+(`String.prototype.toLowerCase()`). The empty attribute set yields `[]` — the
+signature of a default variant. A `UNIQUE (product_id, variant_signature)`
+constraint makes the database, not just the application, reject a duplicate
+variant. Clients must treat `variantSignature` as opaque — never construct or
+parse it.
 
 ## Authorization (temporary gap)
 

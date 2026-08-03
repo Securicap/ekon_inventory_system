@@ -8,25 +8,34 @@ import type { VariantAttribute } from '@ekon/shared';
  * a normalized attribute set is reduced to a single deterministic string, the
  * `variant_signature`.
  *
- * Normalization rules, applied here and nowhere else, and mirrored by CHECK
- * constraints in the migration:
+ * Identity is case-insensitive on both names and values; display case is kept.
+ * The rules, applied here and nowhere else, and mirrored by the constraints and
+ * the historical recompute in the migrations:
  *
  *   - Attribute NAMES are trimmed and lower-cased. "Color", " color ", and
- *     "COLOR" are the same attribute. Two attributes that normalize to the same
- *     name in one variant are a client error.
- *   - Attribute VALUES are trimmed only; case is preserved, because "White" and
- *     "white" are legitimately different values a shop might stock.
+ *     "COLOR" are the same attribute. Two names that collide after normalization
+ *     in one variant are a client error.
+ *   - Attribute VALUES are trimmed for DISPLAY (case preserved) and, separately,
+ *     lower-cased for IDENTITY. "White", "white", and " WHITE " are the same
+ *     variant; the value stored and returned stays as the trimmed "White".
  *   - The set is sorted by normalized name, so input order never matters.
  *
- * The signature is the JSON of the sorted [name, value] pairs. JSON quoting
- * keeps the name/value boundary unambiguous, so `{a: "b=c"}` and `{a: "b", c:
- * ""}`-style collisions cannot occur. An empty attribute set produces `[]`, the
- * signature of a default variant.
+ * The signature is `JSON.stringify` of the sorted `[name, identityValue]` pairs.
+ * JSON quoting keeps the name/value boundary unambiguous, so `{a: "b=c"}` and
+ * `{a: "b", c: ""}`-style collisions cannot occur. An empty attribute set
+ * produces `[]`, the signature of a default variant.
+ *
+ * Lower-casing uses `String.prototype.toLowerCase()` — ordinary, locale-
+ * independent Unicode case mapping. No locale or i18n dependency is involved.
  */
 
 export interface NormalizedAttribute {
+  /** Normalized attribute name: trimmed and lower-cased. */
   name: string;
+  /** Display value: trimmed, original case preserved. Stored and returned as-is. */
   value: string;
+  /** Identity value: trimmed and lower-cased. Used only inside the signature. */
+  identityValue: string;
 }
 
 /** A blank name or value, or two names that collide after normalization. */
@@ -43,8 +52,19 @@ export function normalizeAttributeName(name: string): string {
   return name.trim().toLowerCase();
 }
 
+/** Display value — trimmed, case preserved. This is what is stored and returned. */
 export function normalizeAttributeValue(value: string): string {
   return value.trim();
+}
+
+/**
+ * Identity value — trimmed and lower-cased with ordinary Unicode
+ * (locale-independent) lowercasing. This determines variant identity, so
+ * "White", "white", and " WHITE " map to the same identity while their display
+ * values remain distinct.
+ */
+export function identityAttributeValue(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 /**
@@ -87,7 +107,7 @@ export function normalizeAttributes(
       });
       continue;
     }
-    byName.set(name, { name, value });
+    byName.set(name, { name, value, identityValue: identityAttributeValue(rawValue) });
   }
 
   if (details.length > 0) throw new AttributeNormalizationError(details);
@@ -102,18 +122,25 @@ export function sortAttributes(attributes: NormalizedAttribute[]): NormalizedAtt
 
 /**
  * Builds the deterministic signature from a normalized attribute list. The same
- * attributes in any order yield the same signature; different values yield
- * different signatures; an empty set yields `[]`.
+ * attributes in any order — and in any capitalization — yield the same
+ * signature; genuinely different values yield different signatures; an empty set
+ * yields `[]`.
  */
 export function buildVariantSignature(attributes: NormalizedAttribute[]): string {
-  const pairs = sortAttributes(attributes).map(({ name, value }): [string, string] => [
+  const pairs = sortAttributes(attributes).map(({ name, identityValue }): [string, string] => [
     name,
-    value,
+    identityValue,
   ]);
   return JSON.stringify(pairs);
 }
 
-/** Convenience for callers that already hold response-shaped attributes. */
+/** Convenience for callers that already hold response-shaped (display) attributes. */
 export function signatureFromVariantAttributes(attributes: VariantAttribute[]): string {
-  return buildVariantSignature(attributes.map(({ name, value }) => ({ name, value })));
+  return buildVariantSignature(
+    attributes.map(({ name, value }) => ({
+      name,
+      value,
+      identityValue: identityAttributeValue(value),
+    })),
+  );
 }

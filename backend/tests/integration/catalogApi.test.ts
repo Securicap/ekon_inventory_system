@@ -159,6 +159,40 @@ describe('POST /api/catalog/products', () => {
     expect(body).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
   });
 
+  it('rejects variants that differ only by attribute-value capitalization', async () => {
+    // "White" and "white" are the same variant under the case-insensitive rule.
+    const { status, body } = await post(app, {
+      name: 'Running Shoe',
+      variants: [
+        { attributes: { color: 'White', size: '9' } },
+        { attributes: { color: 'white', size: '9' } },
+      ],
+    });
+    expect(status).toBe(400);
+    expect(body).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+  });
+
+  it('rejects variants that differ only by whitespace and capitalization', async () => {
+    const { status, body } = await post(app, {
+      name: 'Whitespace Case',
+      variants: [{ attributes: { color: 'White' } }, { attributes: { color: ' white ' } }],
+    });
+    expect(status).toBe(400);
+    expect(body).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+  });
+
+  it('accepts variants whose values genuinely differ', async () => {
+    const { status, body } = await post(app, {
+      name: 'Distinct Values',
+      variants: [{ attributes: { color: 'White' } }, { attributes: { color: 'Black' } }],
+    });
+    expect(status).toBe(201);
+    const product = createProductResponseSchema.parse(body);
+    expect(product.variants).toHaveLength(2);
+    // Display case preserved for both.
+    expect(product.variants.map((v) => v.attributes[0]?.value).sort()).toEqual(['Black', 'White']);
+  });
+
   it('does not allow the client to provide a SKU', async () => {
     const { status, body } = await post(app, {
       name: 'Client SKU',
