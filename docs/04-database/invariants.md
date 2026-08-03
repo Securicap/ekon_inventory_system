@@ -63,24 +63,34 @@ The movement insert, the balance update, the `operations` row, and any audit
 event commit in one transaction, or none of them do.
 
 _Enforcement:_ a single `withTransaction` unit of work per command, with
-`SELECT ... FOR UPDATE` on the balance row.
+`SELECT ... FOR UPDATE` on the balance row. Implemented for normal movements by
+the internal posting engine
+(`backend/src/modules/inventory/ledgerService.ts`): the operation claim, the
+balance lock or lazy creation, the movement insert, the balance update, and the
+operation result all commit together or not at all. The engine is internal —
+nothing HTTP reaches it. Audit events join the same transaction when the audit
+module lands.
 
 ## INV-6 — The projection always equals the ledger
 
 For every `(variant, location)`: `quantity_on_hand = SUM(quantity_delta)`.
 
-_Enforcement:_ INV-5 guarantees it at write time. Verified by
-`verify-balances`, run on a schedule, and by a property test over generated
-movement sequences. Recovery is `rebuild-balances`, which recomputes the
-projection from the ledger — always safe, because the ledger is immutable.
+_Enforcement:_ INV-5 guarantees it at write time, and the posting engine derives
+`quantity_before` from the locked balance row rather than by summing the ledger.
+_Planned:_ `verify-balances`, run on a schedule, and a property test over
+generated movement sequences. Recovery is `rebuild-balances`, which recomputes
+the projection from the ledger — always safe, because the ledger is immutable.
 
 ## INV-7 — Every command applies at most once
 
-_Enforcement:_ the `operations.id` primary key exists (0005). _Planned:_ the
-write itself, `INSERT ... ON CONFLICT (id) DO NOTHING RETURNING *`, arrives with
-the posting engine. No row returned means
-replay: load it, compare `request_hash`, and either return the stored result or
-fail with `409` if the body differs. Never check-then-insert, which races.
+_Enforcement:_ the `operations.id` primary key (0005) plus the posting engine's
+`INSERT ... ON CONFLICT (id) DO NOTHING RETURNING id`. No row returned means
+replay: it loads the row, compares `operation_type` and `request_hash`, and
+either returns the movement the first attempt posted or fails with `409`
+(`OPERATION_REPLAYED_WITH_DIFFERENT_BODY`) if either differs. Never
+check-then-insert, which races. A matching operation that records no usable
+movement result fails as an internal inconsistency rather than posting a second
+movement.
 
 _Client obligation:_ the operation id is generated when the form opens and
 reused for every retry, including after a reload. Enforced by
@@ -92,7 +102,9 @@ For any role, by any path.
 
 _Enforcement:_ `CHECK (quantity_on_hand >= 0)` on the balance and
 `CHECK (quantity_before >= 0)`, `CHECK (quantity_after >= 0)` on the movement
-(0005).
+(0005). The posting engine refuses the movement before inserting it, with
+`INSUFFICIENT_STOCK` (422), so the caller gets a meaningful failure; the CHECKs
+remain the final protection.
 
 _Rationale:_ a shelf cannot hold minus three items. Systems that permit negative
 stock are accommodating out-of-order paperwork, and there is always a correct

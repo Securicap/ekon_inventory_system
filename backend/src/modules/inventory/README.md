@@ -20,10 +20,50 @@ the balance projection, and every rule that protects them.
 - **The ledger tables and their invariants** (migration
   `0005_inventory_ledger_core.sql`): `operations`, `inventory_movements`, and
   `inventory_balances`, with every rule below enforced by the database.
-  **No stock-posting workflow is exposed yet** — no service, no repository, no
-  endpoint reads or writes these tables, and nothing inserts a movement. The
-  schema exists so the posting engine can be built against invariants that
-  already hold.
+- **The internal posting engine** (`ledgerService.ts`,
+  `infrastructure/ledgerRepository.ts`) — one trusted operation,
+  `postMovement`, that appends a single normal movement and moves its balance.
+  **It has no HTTP surface:** no route, no request schema, no handler, and
+  nothing outside this module calls it yet. It is not receiving, not
+  adjustments, and not counts — those workflows are thin callers that arrive in
+  their own PRs.
+
+## The posting engine
+
+`postMovement(command)` runs one transaction and commits all of it or none of
+it (INV-5):
+
+1. Claims the operation id with
+   `INSERT ... ON CONFLICT (id) DO NOTHING RETURNING id`. Never check-then-insert,
+   which races (INV-7).
+2. Locks the `(variant_id, location_id)` balance with `SELECT ... FOR UPDATE`,
+   creating the zero row first if that shelf has never held stock.
+3. Derives `quantity_before` from the locked balance, `quantity_after` from the
+   delta, and `previous_movement_id` from `last_movement_id`. **Stock is never
+   calculated by summing the ledger**, and the caller never supplies before,
+   after, or predecessor values.
+4. Appends one movement, with `reverses_movement_id` always NULL.
+5. Updates the balance projection to the new quantity and last movement.
+6. Records `result_resource_type = 'inventory_movement'` and the movement id on
+   the operation — the pointer only, never the request or response body.
+
+**Retries.** A repeated operation id whose `operation_type` and `request_hash`
+both match returns the movement the first attempt posted, and posts nothing.
+A mismatch on either is `OPERATION_REPLAYED_WITH_DIFFERENT_BODY` (409). A
+matching operation that records no usable movement result is an `INTERNAL`
+failure, never a second movement.
+
+**Rules applied before the transaction opens.** The movement type must be in the
+shared vocabulary; `RECEIPT` and `ADJUSTMENT_IN` require a positive delta,
+`ADJUSTMENT_OUT` a negative one, `COUNT_RECONCILIATION` either; zero and
+fractional deltas are refused; adjustments require a non-blank reason code. A
+movement that would drive stock below zero is refused inside the transaction
+with `INSUFFICIENT_STOCK` (422) — and the database CHECKs remain the final
+protection.
+
+**`REVERSAL` is refused** with a clear "not implemented" error. It derives its
+delta from the movement it reverses and must set `reverses_movement_id`, which
+is a different command shape; it lands with the reversal workflow.
 
 ## Ledger schema (enforced today, in the database)
 
@@ -65,23 +105,24 @@ the balance projection, and every rule that protects them.
 
 ## Deferred (future PRs)
 
-The posting engine itself (the internal service that inserts a movement and
-updates its balance in one transaction), receiving, adjustments, physical
-counts, public reversal, the balance API, transfers, multi-location stock
-behaviour, and location management (create / rename / deactivate). Offline sync
-remains deferred too. No frontend behaviour changes with this schema.
+Receiving, adjustments, physical counts, public reversal, the balance API, and
+every HTTP route that would reach the posting engine. Reversal posting itself.
+Concurrency hardening — the engine takes the row lock, but concurrent-writer
+stress testing and the behaviour under contention are a separate PR. Transfers,
+multi-location stock behaviour, and location management (create / rename /
+deactivate). Offline sync remains deferred too. No frontend behaviour changes
+with this work.
 
-Two rules the schema deliberately leaves to that engine, because they need a
-lookup rather than a row-local check: a `REVERSAL` must belong to the same chain
-as the movement it reverses, and `quantity_delta` must have the sign its
-movement type implies.
+One rule the schema leaves to the reversal workflow because it needs a lookup
+rather than a row-local check: a `REVERSAL` must belong to the same chain as the
+movement it reverses.
 
 ## Invariants that remain the module's own
 
 - **This is the only module permitted to INSERT into `inventory_movements`.**
   That is the boundary the whole system rests on, and it is enforced by review
-  and by `scripts/check-conventions.mjs`, not by the schema.
-- The balance row is updated in the same transaction as the movement insert,
-  under `SELECT ... FOR UPDATE` (INV-5).
+  and by `scripts/check-conventions.mjs`, not by the schema. In practice it now
+  means: through `postMovement`, and nowhere else.
 - Physical counts produce reconciliation movements and never overwrite a
-  quantity (INV-9).
+  quantity (INV-9). The engine can post a `COUNT_RECONCILIATION` in either
+  direction; the count workflow that decides the delta is deferred.
