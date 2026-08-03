@@ -10,6 +10,7 @@ import {
   type HealthResponse,
 } from '@ekon/shared';
 import type { Config } from './config/index.js';
+import { registerCatalog } from './modules/catalog/index.js';
 import { currentSchemaVersion } from './platform/db/migrator.js';
 import type { DatabasePool } from './platform/db/pool.js';
 import { AppError } from './platform/http/errors.js';
@@ -148,6 +149,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
 
     return reply.status(database === 'up' ? 200 : 503).send(body);
   });
+
+  // Business modules. Each owns its own tables and routes; the composition root
+  // only hands them the shared platform dependencies.
+  registerCatalog(app, { pool, clock });
 
   if (serveFrontend) {
     await registerFrontend(app, staticDir);
