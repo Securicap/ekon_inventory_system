@@ -222,6 +222,18 @@ async function replayOperation(
     );
   }
 
+  // The movement must be the one this operation produced. A pointer at some
+  // other operation's movement means the operations row is wrong, and returning
+  // that movement would report a stock change this command never made.
+  if (movement.operationId !== command.operationId) {
+    throw new AppError(
+      'INTERNAL',
+      `Operation ${command.operationId} points at movement ${movement.id}, which was posted ` +
+        `by operation ${movement.operationId}. Refusing to return another operation's movement ` +
+        'or to post a second one.',
+    );
+  }
+
   return movement;
 }
 

@@ -522,6 +522,27 @@ describe('an operation whose result is missing or inconsistent', () => {
     expect(error.code).toBe('INTERNAL');
     expect(await countMovements(chain)).toBe(0);
   });
+
+  it('fails safely when the result points at another operation’s movement', async () => {
+    // Operation A posts legitimately. Operation B is then made to point at A's
+    // movement — returning it would report a stock change B never made.
+    const chain = await newChain();
+    const operationA = command(chain, { quantityDelta: 5 });
+    const posted = await ledger.postMovement(operationA);
+
+    const operationB = command(chain, { quantityDelta: 5 });
+    await seedOperation(operationB, { type: 'inventory_movement', id: posted.id });
+
+    const error = await postFails(operationB);
+    expect(error.code).toBe('INTERNAL');
+    expect(error.message).toMatch(/posted by operation/i);
+
+    // No second movement, and the balance is exactly where operation A left it.
+    expect(await countMovements(chain)).toBe(1);
+    const balance = await readBalance(chain);
+    expect(balance!.quantity_on_hand).toBe(5);
+    expect(balance!.last_movement_id).toBe(posted.id);
+  });
 });
 
 describe('foreign-key failures', () => {
