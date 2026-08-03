@@ -60,7 +60,6 @@ export interface PostMovementCommand {
   reasonCode: string | null;
   note: string | null;
   userId: string;
-  deviceId: string;
   /** When the stock physically moved. */
   occurredAt: Date;
   /** When the system recorded it. Also stamps the operation and the balance. */
@@ -140,7 +139,6 @@ export function createLedgerService(deps: LedgerServiceDeps): LedgerService {
         reasonCode: command.reasonCode,
         note: command.note,
         userId: command.userId,
-        deviceId: command.deviceId,
         occurredAt: command.occurredAt,
         recordedAt: command.recordedAt,
       });

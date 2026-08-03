@@ -3,12 +3,7 @@ import path from 'node:path';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
-import {
-  DEVICE_ID_HEADER,
-  REQUEST_ID_HEADER,
-  errorCodeSchema,
-  type HealthResponse,
-} from '@ekon/shared';
+import { REQUEST_ID_HEADER, errorCodeSchema, type HealthResponse } from '@ekon/shared';
 import type { Config } from './config/index.js';
 import { registerCatalog } from './modules/catalog/index.js';
 import { registerInventory } from './modules/inventory/index.js';
@@ -22,13 +17,6 @@ export interface AppDependencies {
   config: Config;
   pool: DatabasePool;
   clock: Clock;
-}
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    /** Browser installation id, when the client supplied one. */
-    deviceId: string | null;
-  }
 }
 
 /**
@@ -58,11 +46,9 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     bodyLimit: 1_048_576,
   });
 
-  app.decorateRequest('deviceId', null);
-
+  // Every response carries its request id, so a failure a user reports can be
+  // found in the logs.
   app.addHook('onRequest', async (request, reply) => {
-    const deviceId = request.headers[DEVICE_ID_HEADER];
-    request.deviceId = typeof deviceId === 'string' ? deviceId : null;
     void reply.header(REQUEST_ID_HEADER, request.id);
   });
 

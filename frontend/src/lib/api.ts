@@ -1,10 +1,4 @@
-import {
-  DEVICE_ID_HEADER,
-  OPERATION_ID_HEADER,
-  errorBodySchema,
-  type ErrorCode,
-} from '@ekon/shared';
-import { getDeviceId } from './deviceId.js';
+import { OPERATION_ID_HEADER, errorBodySchema, type ErrorCode } from '@ekon/shared';
 
 /**
  * The single way this application talks to the server.
@@ -78,7 +72,7 @@ async function request<T>(
   path: string,
   options: { body?: unknown; operationId?: string; signal?: AbortSignal } = {},
 ): Promise<T> {
-  const headers: Record<string, string> = { [DEVICE_ID_HEADER]: getDeviceId() };
+  const headers: Record<string, string> = {};
 
   if (options.body !== undefined) headers['content-type'] = 'application/json';
   if (options.operationId) headers[OPERATION_ID_HEADER] = options.operationId;

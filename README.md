@@ -124,9 +124,12 @@ data. What it does guarantee today:
 - every write carries a retry-stable operation id, so a repeated submission
   cannot duplicate a movement.
 
-The schema already carries the metadata that offline queuing will need —
-client-generated UUIDv7 identifiers, `device_id`, `client_recorded_at`,
-`client_seq` — so that milestone is additive rather than a redesign.
+Two things the schema already has make that milestone additive rather than a
+redesign: identifiers are client-generatable UUIDv7, and every write carries a
+retry-stable operation id. Whatever else offline queuing turns out to need will
+be designed from real synchronization requirements when the milestone begins,
+rather than guessed at now and welded into permanent stock history — see
+[ADR 9](docs/07-decisions/0009-user-identity-not-device-identity.md).
 
 One constraint it must respect, recorded now:
 `quantity_before`, `quantity_after`, and `previous_movement_id` are assigned by
