@@ -120,8 +120,14 @@ async function checkMigrationNaming() {
  */
 async function checkNoHardcodedStrings() {
   const files = await walk(path.join(ROOT, 'frontend/src'), (f) => f.endsWith('.tsx'));
-  // Text nodes of three or more letters that are not an interpolation.
-  const textNode = />\s*([A-Za-z][A-Za-z' ]{3,})\s*</g;
+  // A JSX text node: letters between a closing `>` and the next `<`. The letter
+  // class is Unicode (`\p{L}`), so accented French and Haitian Creole — "Lè",
+  // "Non", "Èske sa bon" — are caught, not just ASCII.
+  //
+  // False positives inside TypeScript expressions are avoided two ways: the run
+  // must start with a letter (a `{expr}` interpolation starts with `{`), and the
+  // negative lookbehind `(?<!=)` skips the `>` of an arrow function `=>`.
+  const textNode = /(?<!=)>\s*(\p{L}[\p{L}'’ ]*\p{L})\s*</gu;
 
   for (const file of files) {
     const source = await readFile(file, 'utf8');

@@ -15,11 +15,13 @@
   "scripts": {
     "build": "npm run build --workspace shared && npm run build --workspace frontend && npm run build --workspace backend",
     "dev": "npm run dev --workspace backend & npm run dev --workspace frontend",
+    "pretypecheck": "npm run build --workspace shared",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "pretest": "npm run build --workspace shared",
     "test": "npm run test --workspaces --if-present",
     "migrate": "npm run migrate --workspace backend",
     "migrate:status": "npm run migrate:status --workspace backend"

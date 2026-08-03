@@ -69,3 +69,4 @@ check: typecheck lint test ## Everything CI runs, locally
 
 clean: ## Remove build output and dependencies
 	rm -rf node_modules */node_modules */dist backend/public
+	find . -name '*.tsbuildinfo' -not -path './node_modules/*' -delete

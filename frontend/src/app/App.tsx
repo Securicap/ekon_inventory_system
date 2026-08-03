@@ -55,7 +55,7 @@ export function App() {
               <dt className="text-slate-600">{t('health.version')}</dt>
               <dd className="tabular font-medium">{health.data.version}</dd>
 
-              <dt className="text-slate-600">Lè</dt>
+              <dt className="text-slate-600">{t('health.time')}</dt>
               <dd className="tabular font-medium">{formatShopTime(health.data.time, locale)}</dd>
             </dl>
           )}

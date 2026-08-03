@@ -32,6 +32,7 @@
   "health.database": "Base de données",
   "health.schemaVersion": "Version du schéma",
   "health.version": "Version de l'application",
+  "health.time": "Heure",
   "health.up": "Connectée",
   "health.down": "Déconnectée"
 }

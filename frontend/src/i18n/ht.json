@@ -32,6 +32,7 @@
   "health.database": "Baz done",
   "health.schemaVersion": "Vèsyon schema",
   "health.version": "Vèsyon aplikasyon",
+  "health.time": "Lè",
   "health.up": "Konekte",
   "health.down": "Pa konekte"
 }
