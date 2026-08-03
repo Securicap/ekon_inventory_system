@@ -4,7 +4,9 @@ Inventory system for a small family retail business in Haiti. Store employees
 record stock from a browser on a shared shop laptop; the owner reviews the same
 information remotely from another country.
 
-**Status:** Sprint 0 — engineering foundation. No business features yet.
+**Status:** Sprint 0 complete. First business capability in progress — the
+`catalog` module can create and list stockable products with server-generated
+SKUs ([backend/src/modules/catalog](backend/src/modules/catalog/README.md)).
 
 ---
 
