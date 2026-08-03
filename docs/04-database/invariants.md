@@ -71,6 +71,12 @@ operation result all commit together or not at all. The engine is internal —
 nothing HTTP reaches it. Audit events join the same transaction when the audit
 module lands.
 
+_Verified by:_ `backend/tests/integration/inventoryPostingConcurrency.test.ts`,
+which forces transactions to genuinely overlap and checks that writers to one
+(variant, location) serialize behind its balance row lock while independent
+chains proceed in parallel. The guarantee is PostgreSQL's row-lock semantics at
+`READ COMMITTED` on a single database — no retry loop, no isolation change.
+
 ## INV-6 — The projection always equals the ledger
 
 For every `(variant, location)`: `quantity_on_hand = SUM(quantity_delta)`.

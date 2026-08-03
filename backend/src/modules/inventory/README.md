@@ -65,6 +65,39 @@ protection.
 delta from the movement it reverses and must set `reverses_movement_id`, which
 is a different command shape; it lands with the reversal workflow.
 
+**Two updates must each touch exactly one row** — the balance and the operation
+result. Both rows were located earlier in the same transaction, so any other
+count is a broken assumption: the engine raises and the unit of work rolls back
+rather than leaving a movement whose projection never moved. Neither is an
+upsert.
+
+### Concurrency
+
+At PostgreSQL's default `READ COMMITTED`, with no retry loop, no isolation
+change, and no lock outside the database:
+
+- **Writers to the same (variant, location) serialize** behind the
+  `SELECT ... FOR UPDATE` on that chain's balance row. The second writer reads
+  the quantity the first one committed, so `quantity_before` and
+  `previous_movement_id` cannot be stale. The chain and the projection stay
+  equal however the commands interleave.
+- **First writers to a chain that has no balance row** contend on the lazy
+  `INSERT ... ON CONFLICT DO NOTHING` instead, then on the row lock. Exactly one
+  balance row and one opening movement result.
+- **Independent chains stay independent.** A lock held on one (variant,
+  location) does not delay posting to another.
+- **Concurrent identical retries post once.** Callers that overlap with a
+  request still in flight all receive the same persisted movement, and stock
+  moves a single time.
+- **A losing command leaves nothing behind** — no operation row, no movement,
+  no partial balance change — whether it lost to the stock floor or to a
+  conflicting reuse of its operation id.
+
+These are covered by `tests/integration/inventoryPostingConcurrency.test.ts`,
+which forces genuine transaction overlap and verifies it against
+`pg_stat_activity` before releasing. They are PostgreSQL transaction and
+row-lock guarantees on one database — nothing about multi-node behaviour.
+
 ## Ledger schema (enforced today, in the database)
 
 - **Append-only.** `BEFORE UPDATE`, `BEFORE DELETE`, and `BEFORE TRUNCATE`
@@ -107,11 +140,9 @@ is a different command shape; it lands with the reversal workflow.
 
 Receiving, adjustments, physical counts, public reversal, the balance API, and
 every HTTP route that would reach the posting engine. Reversal posting itself.
-Concurrency hardening — the engine takes the row lock, but concurrent-writer
-stress testing and the behaviour under contention are a separate PR. Transfers,
-multi-location stock behaviour, and location management (create / rename /
-deactivate). Offline sync remains deferred too. No frontend behaviour changes
-with this work.
+Transfers, multi-location stock behaviour, and location management (create /
+rename / deactivate). Offline sync remains deferred too. No frontend behaviour
+changes with this work.
 
 One rule the schema leaves to the reversal workflow because it needs a lookup
 rather than a row-local check: a `REVERSAL` must belong to the same chain as the
