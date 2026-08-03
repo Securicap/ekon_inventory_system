@@ -1,10 +1,12 @@
-import type { FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { listInventoryLocationsResponseSchema } from '@ekon/shared';
 import { buildApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config/index.js';
 import { fixedClock } from '../../src/platform/clock/index.js';
 import { newId } from '../../src/platform/ids/uuidv7.js';
+import { registerInventoryRoutes } from '../../src/modules/inventory/routes.js';
+import type { InventoryService } from '../../src/modules/inventory/index.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
 
 const SEED_NAME = 'Main Store';
@@ -162,5 +164,25 @@ describe('GET /api/inventory/locations', () => {
     expect(locations[0]?.isDefault).toBe(true);
     // Inactive location is still returned.
     expect(locations.find((l) => l.name === 'Closed Kiosk')?.isActive).toBe(false);
+  });
+});
+
+describe('inventory route capability declaration', () => {
+  it('declares config.capability "inventory.read" on GET /api/inventory/locations', async () => {
+    // Capture the config the route actually registers via Fastify's onRoute
+    // hook — the real value, not a duplicated literal. No database needed.
+    const app = Fastify();
+    let capturedConfig: { capability?: unknown } | undefined;
+    app.addHook('onRoute', (route) => {
+      if (route.method === 'GET' && route.url === '/api/inventory/locations') {
+        capturedConfig = route.config as { capability?: unknown };
+      }
+    });
+
+    const stubService: InventoryService = { listLocations: async () => [] };
+    registerInventoryRoutes(app, stubService);
+
+    expect(capturedConfig?.capability).toBe('inventory.read');
+    await app.close();
   });
 });

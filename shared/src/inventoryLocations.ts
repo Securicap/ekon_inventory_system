@@ -15,7 +15,7 @@ export const LOCATION_NAME_MAX_LENGTH = 120;
 export const inventoryLocationSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  /** Exactly one location is the default; a partial unique index enforces it. */
+  /** True for the default location; the database permits at most one default. */
   isDefault: z.boolean(),
   /** Locations deactivate rather than delete once they carry history. */
   isActive: z.boolean(),
