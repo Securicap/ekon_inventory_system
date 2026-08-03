@@ -13,7 +13,7 @@ import type { Config } from './config/index.js';
 import { registerCatalog } from './modules/catalog/index.js';
 import { currentSchemaVersion } from './platform/db/migrator.js';
 import type { DatabasePool } from './platform/db/pool.js';
-import { AppError } from './platform/http/errors.js';
+import { AppError, isMalformedJsonBodyError } from './platform/http/errors.js';
 import { newId } from './platform/ids/uuidv7.js';
 import type { Clock } from './platform/clock/index.js';
 
@@ -87,6 +87,25 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
             path: issue.path.join('.'),
             message: issue.message,
           })),
+          requestId: request.id,
+        },
+      });
+    }
+
+    // Fastify rejects a malformed or empty JSON body before the route runs. It
+    // is a client mistake, not a server fault, so it gets the same structured
+    // 400 shape as validation and is logged at info — never echoing parser
+    // internals, a stack trace, or the request body.
+    if (isMalformedJsonBodyError(error)) {
+      const parserCode = (error as { code?: unknown }).code;
+      request.log.info(
+        { code: typeof parserCode === 'string' ? parserCode : undefined },
+        'malformed request body',
+      );
+      return reply.status(400).send({
+        error: {
+          code: errorCodeSchema.enum.VALIDATION_FAILED,
+          message: 'Malformed JSON request body',
           requestId: request.id,
         },
       });
