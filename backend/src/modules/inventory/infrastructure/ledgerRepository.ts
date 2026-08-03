@@ -1,5 +1,6 @@
 import type { MovementType } from '@ekon/shared';
 import type { DatabaseClient } from '../../../platform/db/pool.js';
+import { AppError } from '../../../platform/http/errors.js';
 
 /**
  * Ledger persistence: the `operations`, `inventory_movements`, and
@@ -178,12 +179,20 @@ export async function completeOperation(
   tx: DatabaseClient,
   params: { id: string; movementId: string },
 ): Promise<void> {
-  await tx.query(
+  const result = await tx.query(
     `UPDATE operations
         SET result_resource_type = $2,
             result_resource_id   = $3
       WHERE id = $1`,
     [params.id, MOVEMENT_RESULT_RESOURCE_TYPE, params.movementId],
+  );
+  // This transaction claimed the operation a few statements ago, so exactly one
+  // row must be here to stamp. Anything else means the row was never claimed or
+  // no longer exists, and a movement whose operation records no result would be
+  // re-posted by the next retry.
+  assertUpdatedExactlyOneRow(
+    result.rowCount,
+    `operation ${params.id} while recording its movement result`,
   );
 }
 
@@ -232,7 +241,7 @@ export async function updateBalance(
   tx: DatabaseClient,
   params: UpdateBalanceParams,
 ): Promise<void> {
-  await tx.query(
+  const result = await tx.query(
     `UPDATE inventory_balances
         SET quantity_on_hand = $3,
             last_movement_id = $4,
@@ -245,6 +254,15 @@ export async function updateBalance(
       params.lastMovementId,
       params.updatedAt,
     ],
+  );
+  // The caller located and locked this row earlier in the same transaction, so
+  // exactly one row must be updated. Zero means the movement was appended and
+  // the projection was not moved with it — the ledger and its balance would
+  // disagree from that point on. Deliberately not an upsert: a missing row here
+  // is a defect to surface, not a row to conjure.
+  assertUpdatedExactlyOneRow(
+    result.rowCount,
+    `balance for variant ${params.variantId} at location ${params.locationId}`,
   );
 }
 
@@ -312,6 +330,20 @@ export async function getMovementById(
   );
   const row = rows[0];
   return row ? toMovement(row) : null;
+}
+
+/**
+ * Guards an UPDATE that must touch exactly one row. Both callers below update a
+ * row this transaction has already located, so any other count is a broken
+ * assumption rather than an ordinary failure: it throws, the unit of work rolls
+ * back, and nothing half-written commits.
+ */
+function assertUpdatedExactlyOneRow(rowCount: number | null, what: string): void {
+  if (rowCount === 1) return;
+  throw new AppError(
+    'INTERNAL',
+    `Expected to update exactly one row for ${what}, updated ${rowCount ?? 'unknown'}`,
+  );
 }
 
 function toMovement(row: MovementRow): PostedMovement {
