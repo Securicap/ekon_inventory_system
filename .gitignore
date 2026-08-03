@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+backend/public/
+*.tsbuildinfo
+
+# environment — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# local database / postgres scratch
+pgdata/
+*.dump
+*.sql.gz
+
+# logs
+*.log
+npm-debug.log*
+
+# test artifacts
+coverage/
+playwright-report/
+test-results/
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
