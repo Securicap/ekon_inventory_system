@@ -11,6 +11,7 @@ import {
 } from '@ekon/shared';
 import type { Config } from './config/index.js';
 import { registerCatalog } from './modules/catalog/index.js';
+import { registerInventory } from './modules/inventory/index.js';
 import { currentSchemaVersion } from './platform/db/migrator.js';
 import type { DatabasePool } from './platform/db/pool.js';
 import { AppError, isMalformedJsonBodyError } from './platform/http/errors.js';
@@ -172,6 +173,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // Business modules. Each owns its own tables and routes; the composition root
   // only hands them the shared platform dependencies.
   registerCatalog(app, { pool, clock });
+  registerInventory(app, { pool });
 
   if (serveFrontend) {
     await registerFrontend(app, staticDir);
