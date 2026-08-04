@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { loginRequestSchema, type AuthenticatedUserResponse } from '@ekon/shared';
 import type { Config } from '../../config/index.js';
-import { unauthenticated } from '../../platform/http/errors.js';
 import type { IdentityAuthService } from './authService.js';
+import { requireActor } from './routeAccess.js';
 import {
   clearSessionCookieOptions,
   SESSION_COOKIE_NAME,
@@ -12,13 +12,10 @@ import {
 /**
  * The authentication HTTP surface: sign in, sign out, and ask who you are.
  *
- * These three routes are public in the sense that they take no authenticated
- * principal — they are how one is obtained — and `/me` authenticates itself,
- * here, from the cookie. There is deliberately no `onRequest` hook in this
- * file: protecting the catalog and inventory routes, decorating requests with a
- * principal, and enforcing capabilities are one coherent change and belong
- * together in the PR that makes it. Adding half of it now would mean a hook
- * that guards nothing but has to be reasoned about anyway.
+ * Login and logout are public — they are how a session is obtained and given
+ * up, so requiring one would be circular. `/me` is authenticated-only: it needs
+ * a valid session and no particular capability, and the enforcement hook has
+ * already resolved the actor by the time its handler runs.
  *
  * None of the three carries an operation id. The header exists so that a
  * retried movement is posted once, and signing in is not a ledger command:
@@ -38,7 +35,7 @@ export function registerIdentityRoutes(
    * the strict shared schema is what makes a request that tries otherwise a 400
    * rather than a field that is quietly ignored.
    */
-  app.post('/api/auth/login', async (request, reply) => {
+  app.post('/api/auth/login', { config: { auth: 'public' } }, async (request, reply) => {
     const input = loginRequestSchema.parse(request.body);
     const { user, rawSessionToken } = await service.login(input);
 
@@ -61,7 +58,7 @@ export function registerIdentityRoutes(
    * session all end with the browser holding nothing, which is the whole of
    * what the caller asked for.
    */
-  app.post('/api/auth/logout', async (request, reply) => {
+  app.post('/api/auth/logout', { config: { auth: 'public' } }, async (request, reply) => {
     await service.logout(request.cookies[SESSION_COOKIE_NAME] ?? null);
 
     // Cleared even when nothing was revoked. The browser's copy is the part
@@ -77,6 +74,11 @@ export function registerIdentityRoutes(
    * current capabilities. This is how a demotion reaches the screen without the
    * person signing out.
    *
+   * The handler no longer authenticates: the enforcement hook did it, once, and
+   * left the result on the request. Doing it again here would be a second
+   * session lookup per call for an answer the request already carries, and two
+   * places that could disagree about who is signed in.
+   *
    * Read-only: it does not extend the session, does not stamp an activity
    * timestamp, and does not clear the cookie when the session turns out to be
    * unusable. A read that also mutated would make the twelve hours slide, and
@@ -84,14 +86,12 @@ export function registerIdentityRoutes(
    * happened to be called first.
    *
    * One answer for all five ways this can fail — no cookie, an unknown token,
-   * expired, revoked, deactivated. The client's next move is the same in every
-   * case: sign in.
+   * expired, revoked, deactivated — and it comes from the hook, so it is the
+   * same answer every protected route gives. The client's next move is the same
+   * in every case: sign in.
    */
-  app.get('/api/auth/me', async (request, reply) => {
-    const user = await service.authenticate(request.cookies[SESSION_COOKIE_NAME] ?? null);
-    if (!user) throw unauthenticated();
-
-    const body: AuthenticatedUserResponse = { user };
+  app.get('/api/auth/me', { config: { auth: 'authenticated' } }, async (request, reply) => {
+    const body: AuthenticatedUserResponse = { user: requireActor(request) };
     return reply.status(200).send(body);
   });
 }

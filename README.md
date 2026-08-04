@@ -14,8 +14,11 @@ first-owner bootstrap command, and now **session authentication** — sign in,
 sign out, and `GET /api/auth/me`, behind an http-only cookie carrying an opaque
 server-side session
 ([backend/src/modules/identity](backend/src/modules/identity/README.md)).
-Capability enforcement on the catalog and inventory routes is the next PR: they
-declare what they will require and remain unauthenticated until it lands.
+Those sessions now **protect the API**: every route under `/api/` declares
+whether it is public, authenticated-only, or capability-protected, an
+application that omits a declaration refuses to start, and the catalog and
+inventory routes are enforced — `401` without a session, `403` without the
+capability. The frontend login screen is the next PR.
 
 ---
 

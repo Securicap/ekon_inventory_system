@@ -4,7 +4,16 @@ import { createProductResponseSchema, listProductsResponseSchema, SKU_PATTERN } 
 import { buildApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config/index.js';
 import { fixedClock } from '../../src/platform/clock/index.js';
+import { createTestSession, type TestSession } from '../helpers/authSession.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
+
+/**
+ * Catalog routes are capability-protected, so every request here arrives with a
+ * session. These tests are about the catalog, not about authorization: one
+ * owner, who holds every capability, keeps them focused on what they assert.
+ * Who may do what is `tests/integration/authorization.test.ts`.
+ */
+let owner: TestSession;
 
 interface Injected {
   status: number;
@@ -16,6 +25,7 @@ async function post(app: FastifyInstance, payload: unknown): Promise<Injected> {
     method: 'POST',
     url: '/api/catalog/products',
     headers: { 'content-type': 'application/json' },
+    cookies: owner.cookies,
     payload: JSON.stringify(payload),
   });
   return { status: response.statusCode, body: response.json() };
@@ -27,6 +37,7 @@ describe('POST /api/catalog/products', () => {
 
   beforeAll(async () => {
     db = await createTestDatabase();
+    owner = await createTestSession(db.pool);
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent' },
       pool: db.pool,
@@ -210,6 +221,7 @@ describe('GET /api/catalog/products', () => {
 
   beforeAll(async () => {
     db = await createTestDatabase();
+    owner = await createTestSession(db.pool);
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent' },
       pool: db.pool,
@@ -223,7 +235,11 @@ describe('GET /api/catalog/products', () => {
   });
 
   it('returns an empty array when no products exist', async () => {
-    const response = await app.inject({ method: 'GET', url: '/api/catalog/products' });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/catalog/products',
+      cookies: owner.cookies,
+    });
     expect(response.statusCode).toBe(200);
     expect(listProductsResponseSchema.parse(response.json())).toEqual([]);
   });
@@ -237,7 +253,11 @@ describe('GET /api/catalog/products', () => {
       variants: [{ attributes: {} }, { attributes: { color: 'Blue' } }],
     });
 
-    const response = await app.inject({ method: 'GET', url: '/api/catalog/products' });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/catalog/products',
+      cookies: owner.cookies,
+    });
     expect(response.statusCode).toBe(200);
     const products = listProductsResponseSchema.parse(response.json());
 

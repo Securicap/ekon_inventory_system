@@ -174,10 +174,30 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   });
 
   /**
+   * Identity, first — before any other API route exists.
+   *
+   * This call installs the access enforcement that guards the whole
+   * application: the startup check that every `/api/` route declares whether it
+   * is public, authenticated, or capability-protected, and the request hook
+   * that resolves the session cookie and refuses the request when it does not
+   * satisfy that declaration. Both are `onRoute`/`onRequest` hooks on this root
+   * instance, and a hook only sees routes registered after it — so every route
+   * below this line is covered, and moving this call downward would silently
+   * unprotect whatever ended up above it.
+   *
+   * It also registers login, logout, and `/api/auth/me`.
+   */
+  registerIdentity(app, { config, pool, clock });
+
+  /**
    * Liveness and readiness in one endpoint. Returns 503 when the database is
    * unreachable so the platform stops routing traffic to a broken instance.
+   *
+   * Public: a health check that needed a session would be useless to the
+   * platform that has to decide whether this instance is taking traffic, and it
+   * reveals nothing a caller could not learn by trying to use the application.
    */
-  app.get('/api/health', async (_request, reply) => {
+  app.get('/api/health', { config: { auth: 'public' } }, async (_request, reply) => {
     let database: HealthResponse['database'] = 'down';
     let schemaVersion: string | null = null;
 
@@ -200,14 +220,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     return reply.status(database === 'up' ? 200 : 503).send(body);
   });
 
-  // Modules. Each owns its own tables and routes; the composition root only
-  // hands them the shared platform dependencies.
-  //
-  // Identity is registered first because it is what the others will eventually
-  // depend on. It does not protect them yet: the catalog and inventory routes
-  // declare the capability they will require and remain unauthenticated until
-  // the authorization PR adds the hook that reads it.
-  registerIdentity(app, { config, pool, clock });
+  // Business modules. Each owns its own tables and routes; the composition root
+  // only hands them the shared platform dependencies. Their routes declare the
+  // capability they require and are enforced by the hook identity installed
+  // above — the modules themselves check nothing and know nobody's role.
   registerCatalog(app, { pool, clock });
   registerInventory(app, { pool });
 

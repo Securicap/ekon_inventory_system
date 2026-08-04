@@ -7,6 +7,7 @@ import { fixedClock } from '../../src/platform/clock/index.js';
 import { newId } from '../../src/platform/ids/uuidv7.js';
 import { registerInventoryRoutes } from '../../src/modules/inventory/routes.js';
 import type { InventoryService } from '../../src/modules/inventory/index.js';
+import { createTestSession, type TestSession } from '../helpers/authSession.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
 
 const SEED_NAME = 'Main Store';
@@ -113,9 +114,13 @@ describe('inventory_locations schema and seed', () => {
 describe('GET /api/inventory/locations', () => {
   let db: TestDatabase;
   let app: FastifyInstance;
+  // The route requires `inventory.read`. These tests are about what it returns,
+  // not about who may call it, so they arrive as somebody who may.
+  let owner: TestSession;
 
   beforeAll(async () => {
     db = await createTestDatabase();
+    owner = await createTestSession(db.pool);
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent' },
       pool: db.pool,
@@ -140,14 +145,22 @@ describe('GET /api/inventory/locations', () => {
   });
 
   it('returns 200 with a body that validates against the shared schema', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/inventory/locations' });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/inventory/locations',
+      cookies: owner.cookies,
+    });
     expect(res.statusCode).toBe(200);
     const locations = listInventoryLocationsResponseSchema.parse(res.json());
     expect(locations.length).toBe(3);
   });
 
   it('returns the seeded default location, correctly mapped', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/inventory/locations' });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/inventory/locations',
+      cookies: owner.cookies,
+    });
     const locations = listInventoryLocationsResponseSchema.parse(res.json());
     const main = locations.find((l) => l.name === SEED_NAME);
     expect(main).toBeDefined();
@@ -157,7 +170,11 @@ describe('GET /api/inventory/locations', () => {
   });
 
   it('orders the default first, then by creation time, and keeps inactive visible', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/inventory/locations' });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/inventory/locations',
+      cookies: owner.cookies,
+    });
     const locations = listInventoryLocationsResponseSchema.parse(res.json());
     expect(locations.map((l) => l.name)).toEqual([SEED_NAME, 'Backroom', 'Closed Kiosk']);
     // The default is first even though it is not the earliest by any tie-break rule.

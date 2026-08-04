@@ -115,11 +115,11 @@ process's arguments to every user on the machine.
 
 Three routes, and they are the module's whole HTTP surface:
 
-| Route                   | Answers                                          |
-| ----------------------- | ------------------------------------------------ |
-| `POST /api/auth/login`  | `200` with the user, and sets the session cookie |
-| `POST /api/auth/logout` | `204`, always                                    |
-| `GET /api/auth/me`      | `200` with the current user, or `401`            |
+| Route                   | Access        | Answers                                          |
+| ----------------------- | ------------- | ------------------------------------------------ |
+| `POST /api/auth/login`  | public        | `200` with the user, and sets the session cookie |
+| `POST /api/auth/logout` | public        | `204`, always                                    |
+| `GET /api/auth/me`      | authenticated | `200` with the current user, or `401`            |
 
 `login` takes a username and a password and **nothing else** — no user id, no
 role, no capability list, no session lifetime, no cookie option. The request
@@ -129,7 +129,10 @@ field that is quietly ignored. Login carries no operation id and writes no
 
 The response to `login` and to `/me` is the same safe user — id, username,
 display name, role, and current capabilities, sorted. There is no password hash
-in it, no session id, and no expiry.
+in it, no session id, and no expiry. `/me` does not authenticate for itself: the
+enforcement hook below has already resolved the actor, and the handler returns
+it — one session lookup per request, and one place that decides who is signed
+in.
 
 **A failed sign-in has one answer.** An unknown username, a wrong password, and
 a deactivated account all return `401 UNAUTHENTICATED` with
@@ -232,19 +235,117 @@ then be a display case of the username to keep in step with the identity case.
 One canonical stored form is simpler, and a duplicate is an ordinary `UNIQUE`
 violation.
 
+## Enforcement: who may call what
+
+This module protects the whole application. Two mechanisms, installed by
+`registerIdentity` on the root Fastify instance **before any other API route is
+registered**, so that every module registered afterwards is covered.
+
+### Every API route declares its access
+
+A route says what it is, in its own `config`, next to the handler it guards:
+
+```ts
+{
+  config: {
+    auth: 'public';
+  }
+} // no session; nobody is looked up
+{
+  config: {
+    auth: 'authenticated';
+  }
+} // a valid session, no capability
+{
+  config: {
+    capability: 'catalog.write';
+  }
+} // a valid session that may do this
+```
+
+A capability implies authentication, so declaring both is a **startup failure**,
+not a precedence rule — two statements of one fact can disagree, and a rule a
+reader has to know is worse than an error they are told.
+
+**A route under `/api/` that declares nothing does not start.** The check is an
+`onRoute` hook, so it fires as routes are registered and the application refuses
+to boot. That is the part of this design meant to survive people: every check in
+the request hook is worthless against the endpoint somebody adds next year and
+forgets to protect, and no review reliably catches an absence. Here the absence
+is the failure. Fastify's generated `HEAD` routes carry their `GET`'s
+declaration and pass on it; a hand-written `HEAD` must declare its own. Static
+assets and the single-page fallback are not `/api/` and declare nothing.
+
+### Every request is resolved before its handler
+
+An `onRequest` hook — the earliest point at which the matched route is known —
+reads the declaration and acts on it:
+
+| Declaration     | What happens                                                             |
+| --------------- | ------------------------------------------------------------------------ |
+| `public`        | nothing. No session lookup, no cookie read, `request.actor` stays `null` |
+| `authenticated` | resolve the session; `401` if it does not resolve                        |
+| `capability`    | resolve the session; `401`; then `403` unless the actor holds it         |
+
+`onRequest` rather than `preHandler` deliberately: an anonymous caller is
+refused **before their body is parsed** and before any handler code exists to
+reach. The only work an unauthenticated request buys is one indexed session
+lookup — and on a public route, not even that.
+
+Resolution goes through the same `authenticate()` the login PR built. No SQL is
+duplicated, no other module reads `sessions`, and the guarantees are the ones
+that call already made: missing, unknown, expired, and revoked tokens and
+deactivated users are all refused, and role and capabilities are read **as they
+are now**. So a grant removed from `role_capabilities`, a demotion, or a
+deactivation lands on the very next request — no new sign-in, no session row
+rewritten. One lookup per protected request; nothing is cached, and nothing
+about the actor is ever put in the cookie.
+
+### 401 and 403 are different answers
+
+`401 UNAUTHENTICATED` — "Authentication required" — means nobody is signed in.
+`403 FORBIDDEN` — "You do not have permission to perform this action" — means
+somebody is, and they may not. The remedies differ: one is fixed by signing in
+and the other by asking the owner. A `403` names neither the capability nor the
+roles that hold it; the request id in the envelope is what turns a support call
+into a log line. Neither is disguised as a `404`.
+
+Authorization is **by capability, never by role**. No handler in this system
+compares a role, and a role appears in an access decision only through
+`role_capabilities`.
+
+### The actor
+
+`request.actor` is the person making the request, and the session cookie is its
+only source. Nothing is read from a body, a query parameter, a header, a route
+parameter, or an operation id — an actor the caller can write is not an actor.
+A handler that needs the person calls `requireActor(request)`, which returns it
+or fails as an internal error if the route's declaration and its handler
+disagree about whether anybody is signed in. It never re-authenticates.
+
+Receiving, adjustments, counts, and every other state-changing workflow will
+take their `user_id` from there.
+
+### Public, and why
+
+`GET /api/health` — the platform deciding whether this instance takes traffic
+cannot be asked to sign in first.
+
+`POST /api/auth/login` — it is how a session is obtained.
+
+`POST /api/auth/logout` — **intentionally public, and not a bypass.** Signing
+out has to work when the cookie is missing, invented, expired, already revoked,
+or belongs to somebody who has since been deactivated: in every one of those
+cases the browser must still end up holding nothing. Requiring a valid session
+to give one up would leave exactly the people with a broken session unable to
+clear it. It revokes the presented session when there is one to revoke, answers
+`204` regardless, and reveals nothing about what the cookie contained.
+
 ## Not in this PR
 
-The data model, the password utility, the owner bootstrap, and **authentication**
-exist. A person can sign in, be recognised, and sign out. What that does _not_
-yet do is protect anything:
+The data model, the password utility, the owner bootstrap, authentication, and
+**enforcement** exist. The API is protected. What is still missing:
 
-- **no capability enforcement.** There is no authentication hook, no request
-  principal, and no `403`. The catalog and inventory routes declare the
-  capability they will require in their route `config` and **remain
-  unauthenticated** — anyone who can reach the server can still call them. That
-  hook, the principal it decorates, the public-route metadata it reads, and the
-  protection of every existing business route are one coherent change and arrive
-  together in the next PR;
 - **no login screen.** The frontend has no login form, no session state, and no
   authenticated shell; the API client already sends `credentials: 'same-origin'`,
   so the cookie will simply work when there is a screen to use it. That is the
@@ -263,5 +364,7 @@ yet do is protect anything:
   movements carry arbitrary test actor UUIDs, and the strategy for connecting
   permanent history to real users is its own decision.
 
-`requireCapability(actor, capability)` will be exposed here when there is a
-protected route to call it from. No other module may read these tables directly.
+No other module may read `users`, `sessions`, or `role_capabilities` directly.
+What the rest of the backend uses from here is `requireActor(request)` — and the
+route `config` vocabulary above, which is how every module states its own
+access.

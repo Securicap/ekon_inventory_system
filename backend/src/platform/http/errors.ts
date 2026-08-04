@@ -25,9 +25,23 @@ export class AppError extends Error {
 
 export const notFound = (what: string): AppError => new AppError('NOT_FOUND', `${what} not found`);
 
-export const forbidden = (capability: string): AppError =>
-  new AppError('FORBIDDEN', `Missing capability: ${capability}`);
+/**
+ * The caller is signed in and may not do this.
+ *
+ * Says nothing about *why*: not which capability was required, not which roles
+ * hold it, not who to ask. Naming the capability would describe the
+ * authorization model to anyone probing endpoints, and the person at the
+ * counter cannot act on it either — the answer to "you do not have permission"
+ * is to ask the owner, not to read a policy. The request id in the envelope is
+ * what turns a support call into a log line.
+ */
+export const forbidden = (): AppError =>
+  new AppError('FORBIDDEN', 'You do not have permission to perform this action');
 
+/**
+ * Nobody is signed in — no cookie, or one that no longer resolves to a usable
+ * session. Deliberately one message for all of those; see the identity module.
+ */
 export const unauthenticated = (): AppError =>
   new AppError('UNAUTHENTICATED', 'Authentication required');
 
