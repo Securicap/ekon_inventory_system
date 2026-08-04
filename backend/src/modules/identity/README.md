@@ -66,7 +66,9 @@ reviewable, and it leaves a record.
 
 Argon2id, via `@node-rs/argon2`, at the library's own defaults. Plaintext is
 never stored, never logged, and never put in an error message. The rules are two
-length bounds — minimum 10 characters, maximum 128 — with **no composition
+length bounds — minimum 10 characters, maximum 128, defined once in
+`@ekon/shared` so the login form and the login route cannot disagree about them,
+and nothing about hashing crosses that line — with **no composition
 requirements**: a required digit and symbol add very little and reliably produce
 `Password1!`, which is worse than the four ordinary words somebody would
 otherwise have picked. Passwords are never trimmed; a leading space is a
@@ -109,6 +111,88 @@ Keep it out of both:
 Command-line arguments are deliberately not supported: `ps` shows every
 process's arguments to every user on the machine.
 
+## Signing in
+
+Three routes, and they are the module's whole HTTP surface:
+
+| Route                   | Answers                                          |
+| ----------------------- | ------------------------------------------------ |
+| `POST /api/auth/login`  | `200` with the user, and sets the session cookie |
+| `POST /api/auth/logout` | `204`, always                                    |
+| `GET /api/auth/me`      | `200` with the current user, or `401`            |
+
+`login` takes a username and a password and **nothing else** — no user id, no
+role, no capability list, no session lifetime, no cookie option. The request
+schema is strict, so a request carrying any of those is a `400` rather than a
+field that is quietly ignored. Login carries no operation id and writes no
+`operations` row: signing in twice must mint two sessions, not replay one.
+
+The response to `login` and to `/me` is the same safe user — id, username,
+display name, role, and current capabilities, sorted. There is no password hash
+in it, no session id, and no expiry.
+
+**A failed sign-in has one answer.** An unknown username, a wrong password, and
+a deactivated account all return `401 UNAUTHENTICATED` with
+`Invalid username or password`. Anything that distinguished them would turn the
+login form into a way to ask which usernames exist and which of those still
+work. They also cost roughly the same: an unknown username is still verified
+against a fixed dummy Argon2id hash owned by this module, and a deactivated
+account is refused only _after_ its real hash has been checked. That is not
+constant time and does not claim to be — it is the difference between "not
+trivially distinguishable" and "measurable from the other side of the internet".
+
+### The session
+
+The browser is given an opaque token: 32 bytes from the platform CSPRNG,
+base64url, in a cookie named **`ekon_session`**. The database stores only its
+SHA-256 digest, so a leaked backup yields nothing that can be presented to the
+server. The token is not a UUID, not a JWT, and not an encrypted payload; it is
+never returned in JSON, never logged, never in an error, and never readable by
+frontend JavaScript.
+
+| Cookie attribute | Value      | Why                                                     |
+| ---------------- | ---------- | ------------------------------------------------------- |
+| `HttpOnly`       | always     | an injected script cannot walk away with a session      |
+| `SameSite`       | `Lax`      | another site cannot post as whoever is signed in        |
+| `Path`           | `/`        | one session for the API and the pages alike             |
+| `Max-Age`        | `43200`    | the same twelve hours as the row, from one constant     |
+| `Secure`         | production | a browser silently drops it on plain `http://localhost` |
+| `Domain`         | never set  | host-only; one origin serves everything                 |
+
+The cookie is not signed, and there is no signing secret. Possession of the
+token is the credential, and its validity is decided by a hash lookup against a
+row — a stronger check than a signature, with nothing to keep safe.
+
+**Twelve hours, absolute.** No idle timeout, no sliding expiration, no remember
+me, no refresh token. A sliding window is the option that quietly never ends,
+and an idle timeout signs somebody out mid-count. Twelve hours covers a working
+day and is over by the next one: you sign in once a day.
+
+**Several sessions at once are normal.** The owner can be signed in from another
+country while the shop laptop is signed in too. A new sign-in does not revoke an
+old one, and signing out ends **only the session that was presented** — never
+every session the person has.
+
+**A session is refused when** its token matches no row, it has been revoked, it
+has expired, or the user has been deactivated. All four are one condition in one
+query, so there is no order of checks to get wrong and no way to ask which of
+them failed. Expiry is judged against the injected clock, never the database's
+`now()`.
+
+**Nothing is written when a session is resolved.** No sliding expiry, no
+last-activity timestamp. `/me` is a read, which is what keeps an authenticated
+request to a single query.
+
+**Role and capabilities are resolved on every request**, from `users` and
+`role_capabilities` as they are now. A promotion, a demotion, a deactivation, or
+a change to what a role may do lands on the next request without rewriting or
+replacing a single session row.
+
+Signing out revokes the row — it sets `revoked_at` — and never deletes it. It
+answers `204` whether the cookie held a real token, an expired one, an
+already-revoked one, or nothing at all, and clears the cookie either way. A
+logout that answered differently would be a way to ask whether a token is real.
+
 ## Where the invariants live
 
 In the database, as constraints, not only in the code that usually writes these
@@ -150,18 +234,34 @@ violation.
 
 ## Not in this PR
 
-The data model, the password utility, and the owner bootstrap exist. **There is
-no authentication yet**, and no route reaches this module:
+The data model, the password utility, the owner bootstrap, and **authentication**
+exist. A person can sign in, be recognised, and sign out. What that does _not_
+yet do is protect anything:
 
-- no login, logout, or `/api/auth/me` route; no cookies; no Fastify
-  authentication hook; no request principal;
-- **no capability enforcement** — the catalog and inventory routes declare the
-  capability they will require and remain unauthenticated until it is wired up;
-- no user-management API or UI, no login screen, no password-reset workflow;
-- no session cleanup job, rate limiting, account lockout, or password history;
+- **no capability enforcement.** There is no authentication hook, no request
+  principal, and no `403`. The catalog and inventory routes declare the
+  capability they will require in their route `config` and **remain
+  unauthenticated** — anyone who can reach the server can still call them. That
+  hook, the principal it decorates, the public-route metadata it reads, and the
+  protection of every existing business route are one coherent change and arrive
+  together in the next PR;
+- **no login screen.** The frontend has no login form, no session state, and no
+  authenticated shell; the API client already sends `credentials: 'same-origin'`,
+  so the cookie will simply work when there is a screen to use it. That is the
+  PR after next;
+- no user-management API or UI, no password change, no password-reset workflow,
+  no session listing, and no "sign out everywhere";
+- **no rate limiting**, account lockout, or CAPTCHA on the login route. The
+  defence against guessing is the credential itself — ten characters minimum,
+  Argon2id, no PIN (ADR 10) — and rate limiting is infrastructure that should be
+  chosen deliberately rather than bolted on here;
+- no session cleanup job. Expired rows are refused on sight but accumulate; at
+  this volume that is a housekeeping task, not a defect;
+- no audit event for signing in or out, no IP address, no user agent, no device
+  identity;
 - no foreign key from `inventory_movements.user_id` to `users`. Existing
   movements carry arbitrary test actor UUIDs, and the strategy for connecting
   permanent history to real users is its own decision.
 
-`requireCapability(actor, capability)` will be exposed here when there is an
-actor to pass it. No other module may read these tables directly.
+`requireCapability(actor, capability)` will be exposed here when there is a
+protected route to call it from. No other module may read these tables directly.

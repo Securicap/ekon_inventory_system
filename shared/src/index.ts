@@ -9,6 +9,7 @@
 export * from './roles.js';
 export * from './capabilities.js';
 export * from './identity.js';
+export * from './auth.js';
 export * from './movements.js';
 export * from './errors.js';
 export * from './http.js';
