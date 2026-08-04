@@ -5,6 +5,7 @@ import {
   type PostedMovement,
   type PostMovementCommand,
 } from '../../src/modules/inventory/index.js';
+import { fixedClock } from '../../src/platform/clock/index.js';
 import type { DatabaseClient } from '../../src/platform/db/pool.js';
 import { AppError } from '../../src/platform/http/errors.js';
 import { newId } from '../../src/platform/ids/uuidv7.js';
@@ -28,8 +29,9 @@ import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
  * times out and the test fails rather than passing quietly.
  */
 
-const OCCURRED_AT = new Date('2026-08-03T09:30:00.000Z');
-const RECORDED_AT = new Date('2026-08-03T09:30:05.000Z');
+const OCCURRED_AT = new Date('2026-08-04T10:00:00.000Z');
+/** What the injected clock reads. Fixture rows reuse it; nothing depends on it. */
+const RECORDED_AT = new Date('2026-08-04T12:00:00.000Z');
 
 /** Bounded safety guard on the barrier. Reached only when overlap never happens. */
 const BLOCKED_TIMEOUT_MS = 10_000;
@@ -37,6 +39,29 @@ const POLL_INTERVAL_MS = 10;
 
 let db: TestDatabase;
 let ledger: LedgerService;
+
+/**
+ * The real UUIDv7 generator, with every id it hands out recorded.
+ *
+ * Concurrent commands must not be told apart by which id they were given — that
+ * would be an assumption about scheduling — so nothing here pins an id. The log
+ * exists to count generations and to name the ids that were minted but never
+ * committed. `push` is safe under this concurrency: it is one event loop.
+ */
+const generatedIds: string[] = [];
+
+function generateId(): string {
+  const id = newId();
+  generatedIds.push(id);
+  return id;
+}
+
+/** Ids minted while `run` was in flight, in the order the engine asked for them. */
+async function idsGeneratedBy<T>(run: () => Promise<T>): Promise<{ result: T; ids: string[] }> {
+  const before = generatedIds.length;
+  const result = await run();
+  return { result, ids: generatedIds.slice(before) };
+}
 
 interface Chain {
   variantId: string;
@@ -77,7 +102,6 @@ async function newChain(): Promise<Chain> {
 
 function command(chain: Chain, overrides: Partial<PostMovementCommand> = {}): PostMovementCommand {
   return {
-    movementId: newId(),
     operationId: newId(),
     operationType: 'inventory.post_movement',
     requestHash: 'a'.repeat(64),
@@ -89,7 +113,6 @@ function command(chain: Chain, overrides: Partial<PostMovementCommand> = {}): Po
     note: null,
     userId: newId(),
     occurredAt: OCCURRED_AT,
-    recordedAt: RECORDED_AT,
     ...overrides,
   };
 }
@@ -318,7 +341,11 @@ function rejections<T>(results: PromiseSettledResult<T>[]): unknown[] {
 
 beforeAll(async () => {
   db = await createTestDatabase();
-  ledger = createLedgerService({ pool: db.pool });
+  ledger = createLedgerService({
+    pool: db.pool,
+    clock: fixedClock(RECORDED_AT),
+    generateId,
+  });
 });
 
 afterAll(async () => {
@@ -392,10 +419,12 @@ describe('concurrent withdrawals that cannot both fit', () => {
       reasonCode: 'DAMAGE',
     });
 
-    const results = await postConcurrently(lockBalanceRow(chain), [
-      () => ledger.postMovement(first),
-      () => ledger.postMovement(second),
-    ]);
+    const { result: results, ids } = await idsGeneratedBy(() =>
+      postConcurrently(lockBalanceRow(chain), [
+        () => ledger.postMovement(first),
+        () => ledger.postMovement(second),
+      ]),
+    );
 
     const winners = fulfilled(results);
     const losers = rejections(results);
@@ -411,13 +440,23 @@ describe('concurrent withdrawals that cannot both fit', () => {
     expect(sumDelta).toBe(3);
     expect(ordered).toHaveLength(2);
 
-    // The loser left nothing at all behind: no operation, no movement, and no
-    // trace in the projection.
+    // Both commands claimed their own operation id, so both minted a movement
+    // id. Only the winner's reached the database; the loser's was rolled back
+    // in memory and belongs to no row anywhere.
+    expect(ids).toHaveLength(2);
     const winner = winners[0]!;
-    const loser = winner.id === first.movementId ? second : first;
+    expect(ids).toContain(winner.id);
+    const abandoned = ids.filter((id) => id !== winner.id);
+    expect(abandoned).toHaveLength(1);
+    expect(await countMovementRows(abandoned[0]!)).toBe(0);
+
+    // The loser left nothing at all behind: no operation, no movement, and no
+    // trace in the projection. Which command lost is not assumed — it is read
+    // back from the operation rows.
+    const loser = (await countOperations(first.operationId)) === 0 ? first : second;
+    const won = loser === first ? second : first;
     expect(await countOperations(loser.operationId)).toBe(0);
-    expect(await countMovementRows(loser.movementId)).toBe(0);
-    expect(await countOperations(winner.operationId)).toBe(1);
+    expect(await countOperations(won.operationId)).toBe(1);
   });
 });
 
@@ -429,22 +468,31 @@ describe('concurrent identical retries', () => {
     // The same command body, sent four times, overlapping. This is a client
     // that retried while its first request was still in flight.
     const retried = command(chain, { quantityDelta: 6 });
-    const results = await postConcurrently(
-      lockBalanceRow(chain),
-      Array.from({ length: 4 }, () => () => ledger.postMovement({ ...retried })),
+    const { result: results, ids } = await idsGeneratedBy(() =>
+      postConcurrently(
+        lockBalanceRow(chain),
+        Array.from({ length: 4 }, () => () => ledger.postMovement({ ...retried })),
+      ),
     );
 
     expect(rejections(results)).toEqual([]);
     const returned = fulfilled(results);
     expect(returned).toHaveLength(4);
-    expect(new Set(returned.map((m) => m.id))).toEqual(new Set([retried.movementId]));
+
+    // Exactly one of the four claimed the operation, so exactly one movement id
+    // was ever minted — the other three found the claim taken and replayed,
+    // which mints nothing.
+    expect(ids).toHaveLength(1);
+    const movementId = ids[0]!;
+    expect(new Set(returned.map((m) => m.id))).toEqual(new Set([movementId]));
+
     // Every caller was told the same story about the stock.
     for (const movement of returned) {
       expect(movement.quantityBefore).toBe(10);
       expect(movement.quantityAfter).toBe(16);
     }
 
-    expect(await countMovementRows(retried.movementId)).toBe(1);
+    expect(await countMovementRows(movementId)).toBe(1);
     const { ordered, sumDelta } = await auditChain(chain);
     expect(ordered).toHaveLength(2);
     // Stock moved exactly once, not four times.
@@ -463,7 +511,7 @@ describe('concurrent identical retries', () => {
     expect(rows[0]).toMatchObject({
       count: '1',
       result_resource_type: 'inventory_movement',
-      result_resource_id: retried.movementId,
+      result_resource_id: movementId,
     });
   });
 });
@@ -477,10 +525,12 @@ describe('concurrent reuse of one operation id for different requests', () => {
     const first = command(chain, { operationId, quantityDelta: 4, requestHash: 'b'.repeat(64) });
     const second = command(chain, { operationId, quantityDelta: 9, requestHash: 'c'.repeat(64) });
 
-    const results = await postConcurrently(lockBalanceRow(chain), [
-      () => ledger.postMovement(first),
-      () => ledger.postMovement(second),
-    ]);
+    const { result: results, ids } = await idsGeneratedBy(() =>
+      postConcurrently(lockBalanceRow(chain), [
+        () => ledger.postMovement(first),
+        () => ledger.postMovement(second),
+      ]),
+    );
 
     const winners = fulfilled(results);
     const losers = rejections(results);
@@ -491,22 +541,25 @@ describe('concurrent reuse of one operation id for different requests', () => {
     expect((losers[0] as AppError).status).toBe(409);
 
     const winner = winners[0]!;
-    const loser = winner.id === first.movementId ? second : first;
+    // Only the command that claimed the operation minted an id; the one refused
+    // as a changed replay never got that far.
+    expect(ids).toEqual([winner.id]);
 
     // One movement, and the stock reflects only the winning command.
     expect(await countMovementRows(winner.id)).toBe(1);
-    expect(await countMovementRows(loser.movementId)).toBe(0);
     const { ordered, sumDelta } = await auditChain(chain);
     expect(ordered).toHaveLength(2);
     expect(sumDelta).toBe(10 + winner.quantityDelta);
 
     // The single operation row belongs to the winner and points at its movement.
+    // Which command won is read from the stored hash, never assumed.
     const { rows } = await db.pool.query<{
       request_hash: string;
       result_resource_id: string | null;
     }>(`SELECT request_hash, result_resource_id FROM operations WHERE id = $1`, [operationId]);
     expect(rows).toHaveLength(1);
-    const winningCommand = winner.id === first.movementId ? first : second;
+    const winningCommand = rows[0]!.request_hash === first.requestHash ? first : second;
+    expect(winner.quantityDelta).toBe(winningCommand.quantityDelta);
     expect(rows[0]).toMatchObject({
       request_hash: winningCommand.requestHash,
       result_resource_id: winner.id,

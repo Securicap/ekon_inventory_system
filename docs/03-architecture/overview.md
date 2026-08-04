@@ -90,6 +90,11 @@ is needed.
 record `quantity_before`/`quantity_after` and link to a predecessor, the ledger
 is order-dependent. A movement queued on a client carries a delta only; the
 server assigns its chain position at ingestion. See `docs/07-decisions/0004`.
+Movement ids and `recorded_at` are assigned there too — ids are still generated
+in application code rather than by the database, but by the server's, not the
+browser's. If the offline milestone needs a client-side event identity, it gets
+one through a synchronization envelope designed and reviewed on its own, not by
+widening the posting command.
 
 ## Request lifecycle for a state-changing command
 
@@ -105,11 +110,15 @@ server assigns its chain position at ingestion. See `docs/07-decisions/0004`.
    `capability`, and one that declares nothing fails to register, so an endpoint
    cannot be added unprotected by accident. The handler receives the person as
    `request.actor` and takes `user_id` from there — never from the body.
-4. One transaction opens. The `operations` row is inserted with
-   `ON CONFLICT DO NOTHING`; a conflict means replay, and the stored result is
-   returned.
-5. Domain work runs: lock the balance row, compute before/after, insert the
-   movement, update the balance, write the audit event.
+4. One transaction opens. The server clock is read once, and the `operations`
+   row is inserted with `ON CONFLICT DO NOTHING`; a conflict means replay, and
+   the stored result is returned — no new identity, no new timestamp.
+5. Domain work runs: mint the movement id, lock the balance row, compute
+   before/after, insert the movement, update the balance, write the audit event.
+   The `operation_id` is the client's; the movement's own id and its
+   `recorded_at` are the server's, alongside the chain position and the
+   quantities. `occurred_at` — when the stock physically moved — stays the
+   caller's, and may precede `recorded_at`.
 6. Commit. All of it, or none of it.
 7. On success the client clears the draft. On failure the draft — and its
    operation id — survive, so retrying is safe.
