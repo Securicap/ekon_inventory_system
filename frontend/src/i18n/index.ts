@@ -41,6 +41,21 @@ export function createTranslator(locale: Locale) {
     translate(locale, key, vars);
 }
 
+export type Translator = ReturnType<typeof createTranslator>;
+
+/**
+ * The translator a component should use.
+ *
+ * Every locale-bearing component goes through this one call, so the day a
+ * locale becomes a preference rather than a constant — a stored choice, or the
+ * owner reading French while the counter reads Creole — it is this function
+ * that grows a context, and not every component that renders a string. There is
+ * no language selector yet, and adding one is not this PR's work.
+ */
+export function useTranslator(): Translator {
+  return createTranslator(DEFAULT_LOCALE);
+}
+
 /**
  * Every timestamp is displayed in shop time for every user, everywhere — so the
  * owner abroad and the employee at the counter never read the same movement as

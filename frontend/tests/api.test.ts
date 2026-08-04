@@ -84,6 +84,37 @@ describe('request headers', () => {
     expect(captured[0]!.body).toBe(JSON.stringify({ name: 'Rice' }));
   });
 
+  it('sends no operation id when signing in or out', async () => {
+    // An operation id exists so a retried *movement* is posted once. Signing in
+    // is not a movement — a second attempt must mint a second session, not
+    // replay the first — and the auth routes write no `operations` row, so the
+    // header would claim an idempotency that does not exist.
+    mockFetch(() => jsonResponse({ user: { id: '1' } }));
+    await api.postWithoutOperationId('/api/auth/login', { username: 'marie.j', password: 'x' });
+
+    expect(captured[0]!.headers[OPERATION_ID_HEADER]).toBeUndefined();
+    expect(captured[0]!.credentials).toBe('same-origin');
+    expect(captured[0]!.method).toBe('POST');
+  });
+
+  it('sends no body and no content type when signing out', async () => {
+    mockFetch(() => new Response(null, { status: 204 }));
+    await api.postWithoutOperationId('/api/auth/logout');
+
+    expect(captured[0]!.body).toBeUndefined();
+    expect(captured[0]!.headers['content-type']).toBeUndefined();
+    expect(captured[0]!.headers[OPERATION_ID_HEADER]).toBeUndefined();
+  });
+
+  it('sends no authorization header: the session travels in a cookie only', async () => {
+    mockFetch(() => jsonResponse({}));
+    await api.get('/api/auth/me');
+
+    const headerNames = Object.keys(captured[0]!.headers).map((name) => name.toLowerCase());
+    expect(headerNames).not.toContain('authorization');
+    expect(headerNames).not.toContain('cookie');
+  });
+
   it('sends no operation id or content type on a read', async () => {
     mockFetch(() => jsonResponse([]));
     await api.get('/api/inventory/locations');

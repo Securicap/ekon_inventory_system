@@ -1,9 +1,29 @@
 # Deployment
 
+## Status: not yet
+
+This describes how the system will be deployed, and the procedure is ready to
+follow. It has not been done, deliberately.
+
+The application is usable in a browser — sign in, read the catalog and the
+inventory locations, sign out — but the business cannot yet do the thing it
+needs the system for: **receiving stock**. Deploying before the first inventory
+workflow works end to end would put a production database and a backup schedule
+behind an application nobody can enter inventory with, and would mean the first
+real migration against real data happens before anyone has watched one work.
+
+**Full production deployment is reviewed once receiving works end to end.**
+Nothing here changes when it is; there is simply no environment to run it
+against yet.
+
 ## Shape
 
 One managed web service and one managed PostgreSQL database, in a US East
 region for latency to Haiti. Nothing runs in the shop.
+
+The web service serves the API _and_ the built frontend from one origin, so
+there is one deploy, one certificate, no CORS, and no cookie-domain problem for
+the session cookie. There is no separate frontend host.
 
 ## Environments
 

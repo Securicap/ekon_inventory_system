@@ -29,6 +29,25 @@ The backend serves the built frontend from `backend/public`. One deployment, one
 TLS certificate, no CORS configuration, no cookie-domain problems. The frontend
 always calls relative `/api/...` paths; in development Vite proxies them.
 
+## What the browser holds
+
+Nothing authoritative, and no credential.
+
+The session token lives in an `HttpOnly` cookie the browser sends and JavaScript
+cannot read. There is no token in memory, no `Authorization` header, no JWT, and
+nothing about the signed-in user in `localStorage`, `sessionStorage`, IndexedDB,
+or any cookie written by frontend code. On every page load the application asks
+`GET /api/auth/me` and renders nothing protected until the server has answered;
+a refresh restores the user the same way.
+
+Screens decide what to show from the capabilities that answer returns — never
+from a role name — and that decision is usability only. Every request is
+authorized again by the server, which is the authority. A hidden link is not a
+boundary.
+
+The current screens are a temporary shell, not the platform's visual design; see
+[frontend/README.md](../../frontend/README.md).
+
 ## Layers
 
 ```

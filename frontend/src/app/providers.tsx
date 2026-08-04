@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
+import { AuthProvider } from '../auth/AuthProvider.js';
 import { ApiError, NetworkError } from '../lib/api.js';
 
 /**
@@ -30,7 +31,23 @@ export function createQueryClient(): QueryClient {
   });
 }
 
-export function AppProviders({ children }: { children: ReactNode }) {
-  const [client] = useState(createQueryClient);
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+/**
+ * The two providers the application runs inside: the query cache, and the
+ * answer to who is signed in.
+ *
+ * `AuthProvider` is inside `QueryClientProvider` because it *is* a query — the
+ * session is bootstrapped through `GET /api/auth/me` and cached like any other
+ * read — and because signing out has to be able to drop every protected query
+ * the session opened.
+ *
+ * `client` is accepted so a test can hold the same cache the application uses
+ * and assert what signing out removed from it. Production passes nothing.
+ */
+export function AppProviders({ children, client }: { children: ReactNode; client?: QueryClient }) {
+  const [queryClient] = useState(() => client ?? createQueryClient());
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>{children}</AuthProvider>
+    </QueryClientProvider>
+  );
 }

@@ -18,7 +18,14 @@ Those sessions now **protect the API**: every route under `/api/` declares
 whether it is public, authenticated-only, or capability-protected, an
 application that omits a declaration refuses to start, and the catalog and
 inventory routes are enforced — `401` without a session, `403` without the
-capability. The frontend login screen is the next PR.
+capability.
+
+The application is now **usable from a browser**: sign in, stay signed in
+through the session cookie, read the catalog and the inventory locations, and
+sign out ([frontend](frontend/README.md)). The screens are a temporary shell,
+not the platform's visual design — no dashboard, no design system. **Receiving
+is next**, and it is the first end-to-end inventory workflow; production
+deployment is reviewed after it works.
 
 ---
 
@@ -33,8 +40,12 @@ make setup      # installs dependencies, creates .env, starts Postgres, migrates
 make dev        # backend on :3000, frontend on :5173
 ```
 
-Open <http://localhost:5173>. You should see the system status screen showing a
-connected database and schema version `0001`.
+Open <http://localhost:5173>. You will be asked to sign in. A new database has
+no accounts at all — create the first owner once, with
+`npm run identity:create-owner` (see
+[backend/src/modules/identity](backend/src/modules/identity/README.md)), then
+sign in with it. The landing screen shows a connected database and the schema
+version.
 
 `make help` lists every command.
 

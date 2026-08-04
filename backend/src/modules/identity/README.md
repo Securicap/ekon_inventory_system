@@ -341,15 +341,39 @@ to give one up would leave exactly the people with a broken session unable to
 clear it. It revokes the presented session when there is one to revoke, answers
 `204` regardless, and reveals nothing about what the cookie contained.
 
-## Not in this PR
+## In the browser
 
-The data model, the password utility, the owner bootstrap, authentication, and
-**enforcement** exist. The API is protected. What is still missing:
+There is a login screen. The data model, the password utility, the owner
+bootstrap, authentication, enforcement, **and a usable browser session** exist:
+somebody can open the application, sign in, use the screens that are built, and
+sign out.
 
-- **no login screen.** The frontend has no login form, no session state, and no
-  authenticated shell; the API client already sends `credentials: 'same-origin'`,
-  so the cookie will simply work when there is a screen to use it. That is the
-  PR after next;
+The frontend's part is deliberately small, because the server holds everything
+that matters:
+
+- **`GET /api/auth/me` is the session source of truth.** The application calls
+  it on every page load and renders nothing protected until it has an answer. A
+  refresh restores the user the same way. Nothing about the session or the user
+  is stored in `localStorage`, `sessionStorage`, IndexedDB, or a cookie written
+  by frontend code — a copy in the browser would be a second answer to who is
+  signed in, and it would survive a revocation this module can perform in one
+  `UPDATE`.
+- **The token never reaches JavaScript.** The cookie is `HttpOnly`;
+  `credentials: 'same-origin'` is the whole of the client's part in carrying it.
+  No `Authorization` header, no JWT, nothing to store. Login and logout send no
+  operation id, matching the routes above.
+- **A `401` from any protected request ends the session in the browser too**:
+  every protected query is dropped and the login screen returns. A `403` does
+  not — that person is signed in, and signing in again would change nothing.
+- **Navigation is capability-driven**, and only for screens that exist. A link
+  is not a permission: the enforcement hook above is the authority, and it
+  checks every request whatever the browser drew.
+
+The screens themselves are temporary and are not the platform's visual design.
+See [frontend/README.md](../../../../frontend/README.md).
+
+## Still missing
+
 - no user-management API or UI, no password change, no password-reset workflow,
   no session listing, and no "sign out everywhere";
 - **no rate limiting**, account lockout, or CAPTCHA on the login route. The
