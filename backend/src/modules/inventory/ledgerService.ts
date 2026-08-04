@@ -47,6 +47,14 @@ import {
  * ledger's own account of when it learned about the stock.
  */
 
+/**
+ * Read-only access: the pool, or a transaction already in progress.
+ *
+ * Only the replay comparison uses this. Posting runs entirely on a transaction
+ * client, and nothing that writes is reachable through it.
+ */
+type Queryable = DatabasePool | DatabaseClient;
+
 /** Every movement type this engine can post. Reversal is deliberately absent. */
 export type PostableMovementType = Exclude<MovementType, 'REVERSAL'>;
 
@@ -101,8 +109,52 @@ export interface LedgerServiceDeps {
   generateId?: () => string;
 }
 
+/**
+ * How a caller names a command it may have sent before: the operation id, and
+ * the two things the engine compares against the stored claim.
+ *
+ * The same three fields `PostMovementCommand` carries, and deliberately typed
+ * as their own shape rather than a `Pick<>` of it — a workflow asks this
+ * question *before* it has decided anything else about the command, and often
+ * before it has read the database at all.
+ */
+export interface OperationClaim {
+  operationId: string;
+  operationType: string;
+  requestHash: string;
+}
+
 export interface LedgerService {
   postMovement(command: PostMovementCommand): Promise<PostedMovement>;
+  /**
+   * Answers a command that may already have been posted, without posting.
+   *
+   * Returns the movement a **completed** operation produced, or `null` when
+   * this engine has nothing to answer with yet — either no such operation, or
+   * one that is claimed but has not committed its result. `null` means "carry
+   * on and post"; it never means "this is new", because only the transactional
+   * claim inside `postMovement` can decide that.
+   *
+   * It exists because current-state validation and replay disagree about time.
+   * A workflow must refuse to receive stock against a variant that was retired
+   * *today*; it must also answer a retry of a receipt that was posted while
+   * that variant was still active, and answer it identically however long the
+   * retry took to arrive. A completed operation is a fact about the past, so
+   * asking about it first is what lets a workflow validate the present without
+   * making a settled movement unreachable.
+   *
+   * A mismatched operation type or request hash raises
+   * `OPERATION_REPLAYED_WITH_DIFFERENT_BODY` here, exactly as it would inside
+   * the transaction — one operation id has been used for two different
+   * commands, and the second one must not be validated, let alone posted.
+   *
+   * This is a read. It takes no lock, claims nothing, and is not an
+   * idempotency mechanism: it cannot create an operation, cannot complete one,
+   * and cannot stop two callers racing. It is a shortcut to an answer the
+   * engine already holds, and the engine remains the only thing that decides
+   * who owns a command.
+   */
+  findCompletedMovement(claim: OperationClaim): Promise<PostedMovement | null>;
 }
 
 /**
@@ -204,11 +256,93 @@ export function createLedgerService(deps: LedgerServiceDeps): LedgerService {
     });
   }
 
-  return { postMovement };
+  /**
+   * The pre-transaction half of the same question `replayOperation` answers
+   * after a failed claim. It runs on the pool, so it sees committed operations
+   * only — which is exactly right: an uncommitted claim is not yet an answer to
+   * anybody, and pretending otherwise is how a caller would end up reporting a
+   * movement that then rolled back.
+   */
+  async function findCompletedMovement(claim: OperationClaim): Promise<PostedMovement | null> {
+    const found = await lookUpOperation(deps.pool, claim);
+    return found.state === 'completed' ? found.movement : null;
+  }
+
+  return { postMovement, findCompletedMovement };
+}
+
+/** What the engine knows about an operation id right now. */
+type OperationLookup =
+  { state: 'unknown' } | { state: 'pending' } | { state: 'completed'; movement: PostedMovement };
+
+/**
+ * Reads what an operation id has already produced, and refuses an id that was
+ * used for a different command.
+ *
+ * The one place either of those comparisons is made. Both callers below reach
+ * it with the same question and different expectations about what an
+ * unresolved answer means, so the *comparison* is shared and the *policy* is
+ * stated at each call site rather than guessed at here.
+ *
+ * `pending` — claimed, with no result recorded — is a real state, not a fault:
+ * on the pool it means a concurrent attempt is still in flight. Inside the
+ * posting transaction it means something else entirely, which is why this
+ * function reports it instead of deciding it.
+ *
+ * Nothing here writes, and nothing here locks.
+ */
+async function lookUpOperation(db: Queryable, claim: OperationClaim): Promise<OperationLookup> {
+  const existing = await getOperation(db, claim.operationId);
+  if (!existing) return { state: 'unknown' };
+
+  if (existing.operationType !== claim.operationType) {
+    throw replayedWithDifferentRequest(
+      claim.operationId,
+      `operation type ${existing.operationType} does not match ${claim.operationType}`,
+    );
+  }
+
+  if (existing.requestHash !== claim.requestHash) {
+    throw replayedWithDifferentRequest(
+      claim.operationId,
+      'request hash does not match the original request',
+    );
+  }
+
+  if (
+    existing.resultResourceType !== MOVEMENT_RESULT_RESOURCE_TYPE ||
+    existing.resultResourceId === null
+  ) {
+    return { state: 'pending' };
+  }
+
+  const movement = await getMovementById(db, existing.resultResourceId);
+  if (!movement) {
+    throw new AppError(
+      'INTERNAL',
+      `Operation ${claim.operationId} points at movement ${existing.resultResourceId}, ` +
+        'which does not exist. Refusing to post a second movement.',
+    );
+  }
+
+  // The movement must be the one this operation produced. A pointer at some
+  // other operation's movement means the operations row is wrong, and returning
+  // that movement would report a stock change this command never made.
+  if (movement.operationId !== claim.operationId) {
+    throw new AppError(
+      'INTERNAL',
+      `Operation ${claim.operationId} points at movement ${movement.id}, which was posted ` +
+        `by operation ${movement.operationId}. Refusing to return another operation's movement ` +
+        'or to post a second one.',
+    );
+  }
+
+  return { state: 'completed', movement };
 }
 
 /**
- * Answers a command whose operation id was already used.
+ * Answers a command whose operation id was already used, from inside the
+ * transaction whose claim just lost.
  *
  * A genuine retry — same operation type, same request hash — returns the
  * movement the first attempt posted. Anything else is refused rather than
@@ -222,68 +356,32 @@ async function replayOperation(
   tx: DatabaseClient,
   command: PostMovementCommand,
 ): Promise<PostedMovement> {
-  const existing = await getOperation(tx, command.operationId);
+  const found = await lookUpOperation(tx, command);
 
-  // Unreachable in practice: the claim failed because a committed row exists,
-  // and operations are never deleted. Guarded rather than assumed.
-  if (!existing) {
-    throw new AppError(
-      'INTERNAL',
-      `Operation ${command.operationId} could not be claimed and could not be loaded`,
-    );
+  switch (found.state) {
+    case 'completed':
+      return found.movement;
+
+    // Unreachable in practice: the claim failed because a committed row exists,
+    // and operations are never deleted. Guarded rather than assumed.
+    case 'unknown':
+      throw new AppError(
+        'INTERNAL',
+        `Operation ${command.operationId} could not be claimed and could not be loaded`,
+      );
+
+    // The claim conflicted with a *committed* row — `ON CONFLICT DO NOTHING`
+    // waits out an in-flight writer — so the original attempt must have
+    // recorded which movement it produced. If it did not, something outside
+    // this engine wrote that row, and posting a second movement would silently
+    // double the stock. Refusing is the safe answer.
+    case 'pending':
+      throw new AppError(
+        'INTERNAL',
+        `Operation ${command.operationId} was already claimed but records no inventory movement ` +
+          'result. Refusing to post a second movement.',
+      );
   }
-
-  if (existing.operationType !== command.operationType) {
-    throw replayedWithDifferentRequest(
-      command.operationId,
-      `operation type ${existing.operationType} does not match ${command.operationType}`,
-    );
-  }
-
-  if (existing.requestHash !== command.requestHash) {
-    throw replayedWithDifferentRequest(
-      command.operationId,
-      'request hash does not match the original request',
-    );
-  }
-
-  // The operation matches, so the original attempt must have recorded which
-  // movement it produced. If it did not, something outside this engine wrote
-  // that row, and posting a second movement would silently double the stock.
-  // Refusing is the safe answer.
-  if (
-    existing.resultResourceType !== MOVEMENT_RESULT_RESOURCE_TYPE ||
-    existing.resultResourceId === null
-  ) {
-    throw new AppError(
-      'INTERNAL',
-      `Operation ${command.operationId} was already claimed but records no inventory movement ` +
-        'result. Refusing to post a second movement.',
-    );
-  }
-
-  const movement = await getMovementById(tx, existing.resultResourceId);
-  if (!movement) {
-    throw new AppError(
-      'INTERNAL',
-      `Operation ${command.operationId} points at movement ${existing.resultResourceId}, ` +
-        'which does not exist. Refusing to post a second movement.',
-    );
-  }
-
-  // The movement must be the one this operation produced. A pointer at some
-  // other operation's movement means the operations row is wrong, and returning
-  // that movement would report a stock change this command never made.
-  if (movement.operationId !== command.operationId) {
-    throw new AppError(
-      'INTERNAL',
-      `Operation ${command.operationId} points at movement ${movement.id}, which was posted ` +
-        `by operation ${movement.operationId}. Refusing to return another operation's movement ` +
-        'or to post a second one.',
-    );
-  }
-
-  return movement;
 }
 
 /**

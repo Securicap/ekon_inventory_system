@@ -37,6 +37,16 @@ export const quantityDeltaSchema = z
     message: 'quantity_delta must not be zero',
   });
 
+/**
+ * The largest quantity any single movement may carry.
+ *
+ * `quantity_delta`, `quantity_before`, and `quantity_after` are `integer`
+ * columns, so this is the database's own ceiling rather than a business policy.
+ * Stated here so a request that could never be stored is refused as a `400`
+ * instead of failing inside a transaction as a `500`.
+ */
+export const MAX_MOVEMENT_QUANTITY = 2_147_483_647;
+
 /** UUIDv7, generated at the point of capture. */
 export const idSchema = z.string().uuid();
 
@@ -46,3 +56,44 @@ export const idSchema = z.string().uuid();
  * reload. Generating a fresh id per retry defeats duplicate protection entirely.
  */
 export const operationIdSchema = idSchema;
+
+/**
+ * When the stock physically moved — **business time**, and the caller's to
+ * state. A delivery counted this morning and entered this afternoon occurred
+ * this morning, so a value earlier than the server's own `recorded_at` is
+ * ordinary rather than an error. It is never the time the server recorded the
+ * movement: that is the ledger's, and no request supplies it.
+ *
+ * An offset is accepted as well as `Z`, because the phone or laptop stating the
+ * business time is in Haiti and its clock is local. The server normalizes to
+ * UTC once, so `10:00:00-05:00` and `15:00:00Z` are the same instant to both
+ * the ledger and the request hash.
+ *
+ * A future timestamp is deliberately not refused here. Clocks on shop hardware
+ * drift, and rejecting a delivery because a laptop is four minutes fast would
+ * block real work to enforce nothing the ledger depends on.
+ */
+export const occurredAtSchema = z
+  .string()
+  .datetime({ offset: true, message: 'occurredAt must be an ISO 8601 timestamp' })
+  .refine(isRealCalendarDate, 'occurredAt must be a real calendar date');
+
+/**
+ * True when the date part of an ISO timestamp names a day that exists.
+ *
+ * The format check above accepts `2026-02-31`, and `new Date()` would silently
+ * roll it forward to 3 March rather than refusing it — so a typo would be
+ * stored as a real, wrong business date. This compares the parsed calendar
+ * fields against what was written.
+ */
+function isRealCalendarDate(value: string): boolean {
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  const asUtc = new Date(Date.UTC(year, month - 1, day));
+  return (
+    asUtc.getUTCFullYear() === year &&
+    asUtc.getUTCMonth() === month - 1 &&
+    asUtc.getUTCDate() === day
+  );
+}

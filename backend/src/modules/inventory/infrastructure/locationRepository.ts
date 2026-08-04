@@ -18,6 +18,17 @@ interface LocationRow {
 }
 
 /**
+ * A location, as a workflow about to move stock needs to see it: does it exist,
+ * and may stock still be put there. Never crosses the wire, so it carries none
+ * of the presentation fields.
+ */
+export interface StockableLocation {
+  id: string;
+  /** Locations deactivate rather than delete once they carry history. */
+  isActive: boolean;
+}
+
+/**
  * Lists every location, active and inactive. Deterministic order: the default
  * location first, then by creation time, then by id as a stable tie-breaker.
  */
@@ -28,6 +39,29 @@ export async function listLocations(db: Queryable): Promise<InventoryLocation[]>
       ORDER BY is_default DESC, created_at, id`,
   );
   return rows.map(toLocation);
+}
+
+/**
+ * Reads the one thing a stock workflow has to know before it posts: whether
+ * this location exists, and whether stock may still be put there.
+ *
+ * Two columns rather than the whole row and its wire mapping, because a
+ * receiving request is not a location screen. The `is_active` flag is returned
+ * rather than acted on — what an inactive location means is the calling
+ * workflow's decision.
+ */
+export async function findLocationForStock(
+  db: Queryable,
+  locationId: string,
+): Promise<StockableLocation | null> {
+  const { rows } = await db.query<Pick<LocationRow, 'id' | 'is_active'>>(
+    `SELECT id, is_active
+       FROM inventory_locations
+      WHERE id = $1`,
+    [locationId],
+  );
+  const row = rows[0];
+  return row ? { id: row.id, isActive: row.is_active } : null;
 }
 
 function toLocation(row: LocationRow): InventoryLocation {

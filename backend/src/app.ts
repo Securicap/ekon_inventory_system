@@ -224,8 +224,11 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // only hands them the shared platform dependencies. Their routes declare the
   // capability they require and are enforced by the hook identity installed
   // above — the modules themselves check nothing and know nobody's role.
-  registerCatalog(app, { pool, clock });
-  registerInventory(app, { pool });
+  //
+  // Catalog first: the inventory module asks it whether a variant may be
+  // stocked, and asks through its application service rather than its tables.
+  const catalog = registerCatalog(app, { pool, clock });
+  registerInventory(app, { pool, clock, catalog });
 
   if (serveFrontend) {
     await registerFrontend(app, staticDir);
