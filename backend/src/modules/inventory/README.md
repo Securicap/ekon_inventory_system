@@ -404,8 +404,8 @@ Adjustments, physical counts, public reversal, and the balance API. Reversal
 posting itself. Transfers, multi-location stock behaviour, and location
 management (create / rename / deactivate). Offline sync remains deferred too.
 
-The **receiving screen** is deferred as well: this work is the backend workflow
-and its endpoint, and no frontend behaviour changes with it.
+The **receiving screen** now exists and calls this endpoint — see
+[frontend/README.md](../../../../frontend/README.md).
 
 Deferred with receiving specifically, and deliberately: suppliers, purchase
 orders, invoices, costs, shipment records, receiving statuses, draft receipts,

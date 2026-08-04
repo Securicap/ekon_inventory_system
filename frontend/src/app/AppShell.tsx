@@ -8,6 +8,7 @@ import { useTranslator, type MessageKey } from '../i18n/index.js';
 import { CatalogScreen } from '../screens/CatalogScreen.js';
 import { HomeScreen } from '../screens/HomeScreen.js';
 import { InventoryScreen } from '../screens/InventoryScreen.js';
+import { ReceivingScreen } from '../screens/ReceivingScreen.js';
 
 /**
  * The authenticated shell: who is signed in, how to leave, where to go, and one
@@ -19,7 +20,7 @@ import { InventoryScreen } from '../screens/InventoryScreen.js';
  * charts, and no summary tiles, because inventing numbers before the workflows
  * that produce them exist would be inventing the business's numbers.
  */
-type View = 'home' | 'catalog' | 'inventory';
+type View = 'home' | 'catalog' | 'inventory' | 'receiving';
 
 interface NavigationItem {
   view: View;
@@ -35,16 +36,23 @@ interface NavigationItem {
  *
  *  - visibility is decided by capability, never by role. There is no
  *    `role === 'OWNER'` anywhere in this application;
- *  - a capability is not a destination. `inventory.receive` is granted to every
- *    employee and is enforced by the API, but there is no receiving screen yet,
- *    so nothing here offers one. A link to a screen that does not exist is
- *    worse than a missing link. The same goes for `identity.manage`,
- *    `audit.read`, and `reports.export`: the entries arrive with the screens.
+ *  - a capability is not a destination. A link to a screen that does not exist
+ *    is worse than a missing link, so an entry arrives with its screen and not
+ *    before. `identity.manage`, `audit.read`, and `reports.export` are still
+ *    waiting for theirs.
+ *
+ * Receiving is gated on `inventory.receive` and on nothing else. Reading stock
+ * and booking it in are different permissions — an employee may hold both, and
+ * somebody may hold only the first — so `inventory.read` must not open this
+ * door. The API enforces the same capability, which is the boundary that
+ * matters; this only decides whether somebody is shown a door that will be shut
+ * in their face.
  */
 const NAVIGATION: readonly NavigationItem[] = [
   { view: 'home', labelKey: 'nav.home' },
   { view: 'catalog', labelKey: 'nav.products', capability: 'catalog.read' },
   { view: 'inventory', labelKey: 'nav.stock', capability: 'inventory.read' },
+  { view: 'receiving', labelKey: 'nav.receive', capability: 'inventory.receive' },
 ];
 
 /**
@@ -108,6 +116,7 @@ export function AppShell() {
         {view === 'home' && <HomeScreen />}
         {view === 'catalog' && <CatalogScreen />}
         {view === 'inventory' && <InventoryScreen />}
+        {view === 'receiving' && <ReceivingScreen />}
       </main>
     </div>
   );

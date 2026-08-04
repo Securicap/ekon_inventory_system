@@ -72,20 +72,79 @@ Visibility is decided by **capability, never by role**. There is no
 same way, and a screen that branched on a role name would be a second, quietly
 different answer that a change to `role_capabilities` would never reach.
 
-A capability is not a destination, either. `inventory.receive` is granted to
-every employee and enforced by the API, but there is no receiving screen yet, so
-nothing offers one — and the same goes for `identity.manage`, `audit.read`, and
-`reports.export`. Entries arrive with their screens.
+A capability is not a destination, either: an entry arrives with its screen and
+not before, so `identity.manage`, `audit.read`, and `reports.export` still offer
+nothing. Receiving is gated on **`inventory.receive`** alone — reading stock and
+booking it in are different permissions, and somebody holding only the first
+must not be shown a door the API will shut.
 
 **A hidden link is not a security boundary.** Capabilities arrive from `/me` and
 live in a browser, where anything can be edited. Every request is checked again
 by the server, which is the authority. Hiding a link somebody cannot use is a
 usability property and nothing more.
 
+## Receiving
+
+The first screen in this application that changes anything. An employee holding
+`inventory.receive` books in a delivery: **one variant, one location, one whole
+positive quantity, one arrival time.** It is not purchasing — there is no
+supplier, no order, no invoice, no cost, and no receipt document. The movement
+the server records _is_ the business record.
+
+```
+src/screens/ReceivingScreen.tsx   the form, its states, and the operation id
+src/lib/receiving.ts              active choices · variant labels · local time · validation
+src/lib/receivingApi.ts           POST /api/inventory/receive, typed by the shared schemas
+```
+
+**A retry is safe, and that is the point.** The operation id names the _intent_
+— this delivery, this many, here, at this time — and is generated once when a
+receipt begins, never per attempt. Every retry sends the same id and the same
+fields, so the server recognizes the repeat and answers with the movement it
+already posted. Which makes the honest instruction to somebody who does not know
+whether their receipt went through: press it again.
+
+| What happens                       | What the id does                         |
+| ---------------------------------- | ---------------------------------------- |
+| the form opens                     | a new UUIDv7                             |
+| the button is pressed              | unchanged                                |
+| the connection drops, then a retry | unchanged — the same command, sent again |
+| **Receive another item**           | a new one                                |
+| **Start a new receipt**            | a new one                                |
+
+While a request is in flight the form is disabled, and after a failure it stays
+disabled until the person chooses: **retry the same receipt**, or **start a new
+one**. Editing a field under an id whose outcome is unknown would turn a safe
+retry into a conflict, so the choice is explicit rather than implied by typing.
+A retry is offered only where sending the same thing again could work — a
+dropped connection or a server fault. A refused item, a closed counter, or an id
+already used for a different command is answered by starting again.
+
+**Nothing is written to browser storage.** No draft, no operation id, no form
+state. A shared shop laptop that remembered a half-finished delivery would show
+it to whoever sat down next.
+
+**The server owns identity.** The request carries the operation id, the variant,
+the location, the quantity, and the arrival time — and nothing else. Who
+received the stock comes from the session cookie; the movement id, the recorded
+time, and the resulting quantities are the ledger's.
+
+**The arrival time is business time**, not the moment the server recorded it. It
+is prefilled with the browser's current local time, converted to an instant on
+submission, and a time in the future is not refused: a shop laptop whose clock
+is a few minutes fast must not block a delivery sitting on the counter.
+
+Only active products, active variants, and active locations are offered, and a
+selection that stops being offered is dropped rather than silently sent. The
+screen reads the catalog and the locations it already had; it adds no balance
+query, and it invalidates nothing after a success — receiving changes neither
+the catalog nor the list of counters. **The visual design is still temporary**,
+like every other screen here.
+
 ## Routing
 
 There is none, deliberately. One authentication boundary, and inside it a shell
-that swaps its main panel between three temporary screens. A router would buy
+that swaps its main panel between four temporary screens. A router would buy
 addressable URLs for screens that are about to be replaced, and would have to be
 replaced with them. A hard refresh still works: the backend's single-page
 fallback serves `index.html` for any non-`/api/` path.
@@ -108,14 +167,18 @@ makes, which is the moment it matters.
 
 ## Still missing
 
-- **receiving** — no screen and no API. It is the next milestone, and the first
-  end-to-end inventory workflow;
+- **stock quantities.** Receiving reports the balance the server answered with,
+  and nothing else reads one: there is no balance API, no stock screen, and no
+  low-stock warning;
+- adjustments, physical counts, reversal, and stock removal;
 - no user management, no password change, and no password reset;
 - no audit log, no reports, no notifications;
-- offline operation. Connectivity failures are visible and form drafts survive
-  in `localStorage` with a retry-stable operation id (`lib/operations.ts`), but
-  there is no queue;
+- offline operation. Connectivity failures are visible and a retry is safe, but
+  nothing is queued and nothing survives a closed tab. The draft helpers in
+  `lib/operations.ts` predate receiving and are unused by it — receiving
+  persists nothing;
 - the final visual design.
 
-Full production deployment is deferred until the first inventory workflow works
-end to end — see [docs/06-operations/deployment.md](../docs/06-operations/deployment.md).
+Receiving is the first inventory workflow that works end to end. Full production
+deployment is reviewed now that it does — see
+[docs/06-operations/deployment.md](../docs/06-operations/deployment.md).

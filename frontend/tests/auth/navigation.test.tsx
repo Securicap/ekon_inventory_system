@@ -66,13 +66,23 @@ describe('capability-aware navigation', () => {
     expect(screen.queryByRole('button', { name: ht['nav.stock'] })).toBeNull();
   });
 
-  it('offers no receiving screen for inventory.receive, because there is none', async () => {
-    // The capability is real and the API enforces it. The screen is a later PR,
-    // and a link to a screen that does not exist is worse than no link.
+  it('offers receiving to somebody who may receive stock', async () => {
     await signedInAs({ capabilities: ['inventory.read', 'inventory.receive'] });
+    expect(navigation()).toEqual([ht['nav.home'], ht['nav.stock'], ht['nav.receive']]);
+  });
+
+  it('does not offer receiving to somebody who may only read stock', async () => {
+    // Reading stock and booking it in are different permissions. An employee
+    // holding only the first must not be shown a door the API will shut.
+    await signedInAs({ capabilities: ['inventory.read'] });
 
     expect(navigation()).toEqual([ht['nav.home'], ht['nav.stock']]);
-    expect(screen.queryByText(ht['nav.receive'])).toBeNull();
+    expect(screen.queryByRole('button', { name: ht['nav.receive'] })).toBeNull();
+  });
+
+  it('offers receiving on the capability alone, without inventory.read', async () => {
+    await signedInAs({ capabilities: ['inventory.receive'] });
+    expect(navigation()).toEqual([ht['nav.home'], ht['nav.receive']]);
   });
 
   it('offers no user management, audit, or reports for the capabilities that allow them', async () => {
@@ -87,14 +97,23 @@ describe('capability-aware navigation', () => {
 
   it('decides on capabilities, not on the role name', async () => {
     // An OWNER stripped of capabilities sees nothing; an EMPLOYEE granted them
-    // sees both. If any branch anywhere read the role, one of these would fail.
+    // sees all three. If any branch anywhere read the role, one of these would
+    // fail — an OWNER is exactly the role that "obviously" may receive stock.
     await signedInAs({ role: 'OWNER', capabilities: [] });
     expect(navigation()).toEqual([ht['nav.home']]);
 
     cleanup();
 
-    await signedInAs({ role: 'EMPLOYEE', capabilities: ['catalog.read', 'inventory.read'] });
-    expect(navigation()).toEqual([ht['nav.home'], ht['nav.products'], ht['nav.stock']]);
+    await signedInAs({
+      role: 'EMPLOYEE',
+      capabilities: ['catalog.read', 'inventory.read', 'inventory.receive'],
+    });
+    expect(navigation()).toEqual([
+      ht['nav.home'],
+      ht['nav.products'],
+      ht['nav.stock'],
+      ht['nav.receive'],
+    ]);
   });
 
   it('shows the role as a label only', async () => {

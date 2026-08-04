@@ -23,13 +23,14 @@ application that omits a declaration refuses to start, and the catalog and
 inventory routes are enforced — `401` without a session, `403` without the
 capability.
 
-The application is now **usable from a browser**: sign in, stay signed in
-through the session cookie, read the catalog and the inventory locations, and
-sign out ([frontend](frontend/README.md)). The screens are a temporary shell,
-not the platform's visual design — no dashboard, no design system. Receiving
-exists as a backend workflow and an endpoint; **the receiving screen is next**,
-and it makes the first inventory workflow usable end to end. Production
-deployment is reviewed after that works.
+The application is now **usable from a browser**, and the first inventory
+workflow works end to end: sign in, read the catalog and the inventory
+locations, **book in a delivery** — one item, one location, one quantity, one
+arrival time — and sign out ([frontend](frontend/README.md)). A retry after a
+dropped connection books the stock once, because the browser sends the same
+operation id rather than a new one. The screens are a temporary shell, not the
+platform's visual design — no dashboard, no design system. Production deployment
+is reviewed next.
 
 ---
 
