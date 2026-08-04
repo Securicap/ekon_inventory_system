@@ -24,7 +24,8 @@
     "pretest": "npm run build --workspace shared",
     "test": "npm run test --workspaces --if-present",
     "migrate": "npm run migrate --workspace backend",
-    "migrate:status": "npm run migrate:status --workspace backend"
+    "migrate:status": "npm run migrate:status --workspace backend",
+    "identity:create-owner": "npm run identity:create-owner --workspace backend"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

@@ -34,8 +34,17 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
       ...(config.NODE_ENV === 'development'
         ? { transport: { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss' } } }
         : {}),
+      // Credentials never reach a log line, not even at trace level. The
+      // password paths are listed before any route accepts one, so the
+      // authentication PR cannot forget to add them.
       redact: {
-        paths: ['req.headers.cookie', 'req.headers.authorization', 'req.body.pin'],
+        paths: [
+          'req.headers.cookie',
+          'req.headers.authorization',
+          'req.body.password',
+          'req.body.currentPassword',
+          'req.body.newPassword',
+        ],
         remove: true,
       },
     },
