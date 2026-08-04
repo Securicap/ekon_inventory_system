@@ -28,32 +28,89 @@ the balance projection, and every rule that protects them.
   **It has no HTTP surface:** no route, no request schema, no handler, and
   nothing outside this module calls it yet. It is not receiving, not
   adjustments, and not counts — those workflows are thin callers that arrive in
-  their own PRs.
+  their own PRs. Callers describe the business event; the engine owns the
+  movement's identity and the time it was recorded.
 
 ## The posting engine
 
 `postMovement(command)` runs one transaction and commits all of it or none of
 it (INV-5):
 
-1. Claims the operation id with
+1. Reads the server clock **once**. That single `recordedAt` stamps the
+   operation, the movement, and the balance. The engine takes a `Clock`
+   dependency and never calls `new Date()`, and never `now()` in SQL.
+2. Claims the operation id with
    `INSERT ... ON CONFLICT (id) DO NOTHING RETURNING id`. Never check-then-insert,
    which races (INV-7).
-2. Locks the `(variant_id, location_id)` balance with `SELECT ... FOR UPDATE`,
+3. **Generates the movement id** — after the claim succeeds, never before, so a
+   retry mints no identity it has no use for. UUIDv7, from the same application
+   generator as every other id; no database default, and not derived from the
+   operation id.
+4. Locks the `(variant_id, location_id)` balance with `SELECT ... FOR UPDATE`,
    creating the zero row first if that shelf has never held stock.
-3. Derives `quantity_before` from the locked balance, `quantity_after` from the
+5. Derives `quantity_before` from the locked balance, `quantity_after` from the
    delta, and `previous_movement_id` from `last_movement_id`. **Stock is never
    calculated by summing the ledger**, and the caller never supplies before,
    after, or predecessor values.
-4. Appends one movement, with `reverses_movement_id` always NULL.
-5. Updates the balance projection to the new quantity and last movement.
-6. Records `result_resource_type = 'inventory_movement'` and the movement id on
+6. Appends one movement, with `reverses_movement_id` always NULL.
+7. Updates the balance projection to the new quantity and last movement.
+8. Records `result_resource_type = 'inventory_movement'` and the movement id on
    the operation — the pointer only, never the request or response body.
 
+### What the caller owns, and what the engine owns
+
+The command describes a **business stock event**. The engine owns the permanent
+identity of the record it produces and the time the system claims to have
+recorded it.
+
+| The caller supplies                           | The engine supplies               |
+| --------------------------------------------- | --------------------------------- |
+| `operationId`, `operationType`, `requestHash` | the movement id                   |
+| `variantId`, `locationId`                     | `recordedAt`                      |
+| `movementType`, `quantityDelta`               | `quantityBefore`, `quantityAfter` |
+| `reasonCode`, `note`                          | `previousMovementId`              |
+| `userId`                                      | the balance projection update     |
+| `occurredAt`                                  |                                   |
+
+- **Callers cannot choose a movement id.** It is the primary key of a permanent,
+  immutable record; a caller that could pick it could name a record before it
+  exists, or claim one that already does.
+- **Callers cannot choose `recorded_at`.** It is the ledger's own account of
+  when it learned about the stock, so it comes from the injected server clock.
+- **`occurred_at` remains business time** and remains the caller's: a delivery
+  counted this morning and entered this afternoon occurred this morning. It may
+  precede `recorded_at`, and that is not an error. This engine applies no
+  timestamp policy — how far back a given workflow accepts a business time is
+  that workflow's rule, not the ledger's.
+- **`user_id` comes from trusted workflow context.** The ledger is internal and
+  knows nothing about Fastify: it trusts whatever workflow calls it. When
+  receiving and the other workflows arrive, each will derive it from
+  `request.actor.id` — the authenticated session — and **no request schema will
+  ever accept a user id from the wire.**
+- **`operationId` stays caller-generated**, and has to: it is how a retry names
+  the command it is repeating. It is generated when the form opens and reused on
+  every retry, including after a reload (INV-7).
+- A canonical **request hash covers business fields only.** The movement id and
+  `recorded_at` are not request fields, so nothing that hashes a request should
+  reach for them. (The hashing utility itself is a later PR.)
+
 **Retries.** A repeated operation id whose `operation_type` and `request_hash`
-both match returns the movement the first attempt posted, and posts nothing.
-A mismatch on either is `OPERATION_REPLAYED_WITH_DIFFERENT_BODY` (409). A
-matching operation that records no usable movement result is an `INTERNAL`
-failure, never a second movement.
+both match returns the movement the first attempt posted, and posts nothing —
+found through the operation's result pointer, which is why **a caller never has
+to remember a movement id to retry safely.** No new movement id is minted, no
+timestamp is restamped, and the balance does not move again. A mismatch on
+either is `OPERATION_REPLAYED_WITH_DIFFERENT_BODY` (409). A matching operation
+that records no usable movement result is an `INTERNAL` failure, never a second
+movement.
+
+The clock is sampled before the claim, because the `operations` row needs a
+`created_at` at the moment it is inserted. A replay throws that reading away:
+nothing is rewritten with it, and the original attempt's persisted timestamps
+remain the authoritative ones.
+
+A UUIDv7 collision on the movement id is handled as any other primary-key
+violation: the transaction fails and rolls back. There is no retry loop and no
+collision framework, because there is no collision to defend against.
 
 **Rules applied before the transaction opens.** The movement type must be in the
 shared vocabulary; `RECEIPT` and `ADJUSTMENT_IN` require a positive delta,
@@ -90,7 +147,8 @@ change, and no lock outside the database:
   location) does not delay posting to another.
 - **Concurrent identical retries post once.** Callers that overlap with a
   request still in flight all receive the same persisted movement, and stock
-  moves a single time.
+  moves a single time. Exactly one of them claims the operation, so exactly one
+  movement id is minted — the rest replay, which mints nothing.
 - **A losing command leaves nothing behind** — no operation row, no movement,
   no partial balance change — whether it lost to the stock floor or to a
   conflicting reuse of its operation id.
