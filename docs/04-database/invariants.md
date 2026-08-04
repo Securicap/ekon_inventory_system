@@ -16,9 +16,11 @@ on `inventory_movements` raising `restrict_violation` (0005).
 `UPDATE inventory_movements` or `DELETE FROM inventory_movements` in source.
 
 _Planned:_ the application database role granted only `SELECT, INSERT`, with
-migrations run as a separate owner role. That lands with identity, when roles
-exist. A bug, a bad future migration, or a leaked application credential must
-not be able to alter posted history.
+migrations run as a separate owner role. A bug, a bad future migration, or a
+leaked application credential must not be able to alter posted history. Still
+outstanding after 0007: the roles that migration introduces are _application_
+roles in a table, unrelated to PostgreSQL roles, and the grant change is an
+operations task of its own.
 
 ## INV-2 — Corrections are compensating movements
 
@@ -159,3 +161,66 @@ operations (0005). No delete endpoint exists.
 _Enforcement (planned):_ `UNIQUE (sku)`, plus a trigger rejecting any update
 that changes it. SKUs are printed on physical shelf labels; changing the format
 after labels exist is a physical-world migration.
+
+## INV-14 — A credential is never stored in a form it can be read back from
+
+`users.password_hash` holds an Argon2id hash, and `sessions` stores only the
+hash of a session token — never the token the browser holds. A stolen database
+backup yields no password and no usable session.
+
+_Enforcement:_ split deliberately between the two layers.
+
+The **database** guarantees the structure of the column and nothing about its
+contents: `password_hash` is nonblank, stored trimmed, and bounded at 512
+characters (0007). It does not attempt to recognize an Argon2 string. A CHECK on
+the encoding would make the schema an authority on which algorithm is correct —
+a claim it cannot keep, since it would need migrating in lockstep with any
+algorithm change and would forbid the interim state where old and new hashes
+coexist while accounts rehash on sign-in.
+
+The **application** guarantees what goes in it. `hashPassword` in
+`backend/src/modules/identity/domain/password.ts` is the only function in the
+system that produces a stored credential, it hashes with Argon2id, and it is the
+only path any caller has. Its unit tests assert the produced value is an Argon2id
+PHC string, is never the plaintext, and differs on every call.
+
+`sessions` has no column that could hold a raw token, a refresh token, or a
+session payload. The backend never logs a credential: `req.body.password` and
+its siblings are redacted in `backend/src/app.ts`, and the password utility keeps
+plaintext out of its own error messages — both asserted by tests.
+
+_Rationale:_ this is the one class of data where "we are careful about it" is
+not good enough, because the cost of being wrong is every account in the
+business plus whatever else those passwords were reused for. The protection that
+matters is that there is exactly one way to write the column and it hashes;
+a constraint restating today's algorithm would add a migration to every future
+credential change without narrowing that path any further.
+
+## INV-15 — A user's current role decides what they may do, right now
+
+Capabilities are resolved from `users.role` through `role_capabilities` on every
+request. A session carries no snapshot of them.
+
+_Enforcement:_ `sessions` has no capability, role, or permission column (0007),
+so there is nothing to resolve against except the user's current row. Changing
+a role or setting `is_active = false` therefore lands on the very next request,
+without rewriting a single session row.
+
+_Enforcement (planned):_ the `onRequest` hook that reads the session, loads the
+user, and refuses an inactive one. That arrives with the login route; until it
+does, no route is enforced at all.
+
+## INV-16 — A user with history is deactivated, never deleted
+
+Their name has to stay readable on every movement they posted.
+
+_Enforcement:_ `sessions.user_id` references `users` with `ON DELETE RESTRICT`
+(0007), and `users` has `is_active` rather than a `deleted_at` — one notion of
+"gone", not two subtly different ones that get checked in different places. The
+same rule as INV-12, applied to people.
+
+_Planned:_ the foreign key from `inventory_movements.user_id` to `users`, which
+would make this bite on the ledger too. It is deliberately not in 0007: existing
+movements carry arbitrary test actor UUIDs, and how permanent history gets
+connected to real users is a decision the authentication series makes on its own
+terms rather than smuggling into the migration that first creates `users`.

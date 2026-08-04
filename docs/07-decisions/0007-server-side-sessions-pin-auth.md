@@ -1,6 +1,10 @@
 # 7. Server-side sessions and PIN authentication
 
-**Status:** Accepted — 2026-08-02
+**Status:** Accepted — 2026-08-02. **Superseded in part by ADR 10**
+(2026-08-03): authentication is username + **password**, not a numeric PIN, and
+sessions record no IP address or user agent. Server-side session rows — the
+central decision below — stand unchanged. This document is left as written, per
+ADR 1 — decisions are superseded, not rewritten.
 
 ## Context
 
@@ -10,15 +14,16 @@ logged in.
 
 ## Decision
 
-Authentication is username + numeric PIN, hashed with Argon2id. Sessions are
-rows in PostgreSQL behind an `httpOnly`, `Secure`, `SameSite=Lax` cookie — not
-stateless tokens.
+Authentication is username + ~~numeric PIN~~ (**superseded by ADR 10:**
+password), hashed with Argon2id. Sessions are rows in PostgreSQL behind an
+`httpOnly`, `Secure`, `SameSite=Lax` cookie — not stateless tokens.
 
 - 15-minute sliding idle timeout, 12-hour absolute expiry.
 - No "remember me".
 - The signed-in user's name is visible on every screen.
 - One-tap "switch user".
-- Sessions record IP and user agent; the owner can list and revoke them.
+- ~~Sessions record IP and user agent~~ — **superseded by ADR 9 and ADR 10.** A
+  session row carries neither; the owner can still list and revoke them.
 
 ## Consequences
 

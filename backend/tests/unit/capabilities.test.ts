@@ -18,12 +18,38 @@ describe('capability model', () => {
     }
   });
 
+  it('gives an employee exactly the three capabilities the counter job needs', () => {
+    // Read the catalog, read stock, book in what arrives. Anything beyond that
+    // is granted deliberately, never inherited from a default.
+    expect([...(DEFAULT_ROLE_CAPABILITIES.EMPLOYEE ?? [])].sort()).toEqual([
+      'catalog.read',
+      'inventory.read',
+      'inventory.receive',
+    ]);
+  });
+
   it('does not give employees privileged capabilities', () => {
     const employee = DEFAULT_ROLE_CAPABILITIES.EMPLOYEE ?? [];
-    expect(employee).not.toContain('identity.manage');
-    expect(employee).not.toContain('audit.read');
-    expect(employee).not.toContain('inventory.reverse');
-    expect(employee).not.toContain('catalog.deactivate');
+    for (const capability of [
+      'catalog.write',
+      'catalog.deactivate',
+      'inventory.adjust',
+      'inventory.count',
+      'inventory.reverse',
+      'audit.read',
+      'identity.manage',
+      'reports.export',
+    ] as const) {
+      expect(employee, `employee should not hold ${capability}`).not.toContain(capability);
+    }
+  });
+
+  it('withholds identity.manage from managers and grants it to owners', () => {
+    // Creating accounts, changing roles, and deactivating people is the
+    // owner's. A manager runs the shop floor.
+    expect(DEFAULT_ROLE_CAPABILITIES.MANAGER).not.toContain('identity.manage');
+    expect(DEFAULT_ROLE_CAPABILITIES.OWNER).toContain('identity.manage');
+    expect(DEFAULT_ROLE_CAPABILITIES.SUPER_ADMIN).toContain('identity.manage');
   });
 
   it('has no capability that permits negative stock', () => {

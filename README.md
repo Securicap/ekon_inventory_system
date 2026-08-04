@@ -8,7 +8,11 @@ information remotely from another country.
 module can create and list stockable products with server-generated SKUs
 ([backend/src/modules/catalog](backend/src/modules/catalog/README.md)), and the
 `inventory` module lists inventory locations with one seeded default
-([backend/src/modules/inventory](backend/src/modules/inventory/README.md)).
+([backend/src/modules/inventory](backend/src/modules/inventory/README.md)). The
+`identity` module now holds the users, sessions, and role-capability schema and
+the first-owner bootstrap command
+([backend/src/modules/identity](backend/src/modules/identity/README.md)) —
+there is no login route or capability enforcement yet.
 
 ---
 

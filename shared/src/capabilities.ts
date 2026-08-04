@@ -40,12 +40,20 @@ export const DEFAULT_ROLE_CAPABILITIES: Readonly<Record<string, readonly Capabil
   SUPER_ADMIN: CAPABILITIES,
   OWNER: CAPABILITIES,
   MANAGER: CAPABILITIES.filter((c) => c !== 'identity.manage'),
-  EMPLOYEE: [
-    'catalog.read',
-    'catalog.write',
-    'inventory.read',
-    'inventory.receive',
-    'inventory.adjust',
-    'inventory.count',
-  ],
+  /**
+   * An employee reads the catalog, reads stock, and books in what arrives. That
+   * is the whole job at the counter.
+   *
+   * Everything else is deliberately withheld until someone decides otherwise:
+   * writing the catalog, deactivating a product, adjusting or counting stock,
+   * reversing a movement, reading the audit log, managing users, exporting
+   * reports. Each of those either changes what the numbers mean or can hide the
+   * fact that they changed, so the person doing it should have been given the
+   * capability on purpose rather than inheriting it from a default.
+   *
+   * A shop that wants its employees to run counts grants that later. Starting
+   * permissive and tightening afterwards is the wrong direction: by then people
+   * are used to the access, and taking it back reads as an accusation.
+   */
+  EMPLOYEE: ['catalog.read', 'inventory.read', 'inventory.receive'],
 } as const;

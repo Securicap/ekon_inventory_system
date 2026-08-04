@@ -25,6 +25,24 @@ region for latency to Haiti. Nothing runs in the shop.
 5. Verify: `curl https://<host>/api/health` should return `status: ok` with the
    expected `schemaVersion` and `version`.
 
+## First deploy only: create the owner account
+
+No migration seeds a user, so a newly provisioned environment has no accounts at
+all. Once it is migrated, run the bootstrap command **once**, from a shell with
+the environment's `DATABASE_URL`:
+
+```bash
+read -rs EKON_OWNER_PASSWORD && export EKON_OWNER_PASSWORD
+EKON_OWNER_USERNAME=<username> EKON_OWNER_DISPLAY_NAME='<full name>' \
+  npm run identity:create-owner
+unset EKON_OWNER_PASSWORD
+```
+
+It refuses if an active owner already exists, so re-running it is safe. Every
+account after the first is created by the owner from inside the application.
+Details and the reasoning are in
+[backend/src/modules/identity/README.md](../../backend/src/modules/identity/README.md).
+
 ## Environment variables
 
 Set in the platform's environment settings, never in a committed file. See

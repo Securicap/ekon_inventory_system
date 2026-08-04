@@ -348,10 +348,12 @@ describe('migration 0006 on a clean database', () => {
     expect(rows).toEqual([]);
   });
 
-  it('reports 0006 as the head migration', async () => {
+  it('reports 0006 as applied and unmodified', async () => {
+    // Deliberately not "0006 is the last migration": later migrations land on
+    // top of it, and this suite is about the column drop, not about which file
+    // happens to be at the head today.
     const status = await migrationStatus(db.pool);
-    expect(status.at(-1)).toMatchObject({
-      version: '0006',
+    expect(status.find((row) => row.version === '0006')).toMatchObject({
       filename: M0006,
       applied: true,
       checksumMatches: true,
