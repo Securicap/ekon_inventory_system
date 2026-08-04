@@ -79,7 +79,13 @@ server assigns its chain position at ingestion. See `docs/07-decisions/0004`.
 2. `POST /api/...` carries `x-ekon-operation-id`. The request identifies the
    command, and the session cookie identifies the user — nothing identifies
    the machine (ADR 9).
-3. The route resolves the session and checks a capability.
+3. Before the handler — before the body is even parsed — one hook resolves the
+   session cookie to the current user and checks the capability the route
+   declared. No session is `401`; a session without the capability is `403`.
+   Every `/api/` route declares `auth: 'public'`, `auth: 'authenticated'`, or a
+   `capability`, and one that declares nothing fails to register, so an endpoint
+   cannot be added unprotected by accident. The handler receives the person as
+   `request.actor` and takes `user_id` from there — never from the body.
 4. One transaction opens. The `operations` row is inserted with
    `ON CONFLICT DO NOTHING`; a conflict means replay, and the stored result is
    returned.

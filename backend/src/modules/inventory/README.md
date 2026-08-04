@@ -16,7 +16,9 @@ the balance projection, and every rule that protects them.
   when it needs it — the seeded id is never hard-coded outside the migration.
 - `GET /api/inventory/locations` — lists all locations, active and inactive,
   default first (`ORDER BY is_default DESC, created_at, id`), as a plain array.
-  Declares the `inventory.read` capability (enforcement arrives with identity).
+  Requires the `inventory.read` capability, declared in the route's Fastify
+  `config` and enforced by the identity module before the handler runs: no
+  session is `401`, a session without the capability is `403`.
 - **The ledger tables and their invariants** (migration
   `0005_inventory_ledger_core.sql`): `operations`, `inventory_movements`, and
   `inventory_balances`, with every rule below enforced by the database.

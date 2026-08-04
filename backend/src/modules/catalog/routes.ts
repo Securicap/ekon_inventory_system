@@ -9,12 +9,15 @@ import type { CatalogService } from './service.js';
  * ZodError that the application's central error handler turns into a structured
  * `VALIDATION_FAILED` 400. Success bodies are the shared response shapes.
  *
- * Authorization gap (intentional, documented): capability enforcement is not
- * wired yet because no authenticated principal exists — the identity module is
- * still a scaffold. Each route declares the capability it will require in its
- * `config`, so a single `onRequest` hook can enforce them once identity lands,
- * without touching these handlers. Until then these endpoints are unauthenticated.
- * See backend/src/modules/catalog/README.md.
+ * Both routes are capability-protected. Each declares what it requires in its
+ * `config`, and the identity module's enforcement hook resolves the session and
+ * checks the capability before either handler runs — so a caller who reaches
+ * one of these has a valid session and holds the capability, and neither
+ * handler contains an authorization check or knows anybody's role.
+ *
+ * Neither reads the actor: creating a product records no `user_id` yet. The
+ * workflows that do — receiving, adjustments, counts — will take it from
+ * `requireActor(request)`, never from the request body.
  */
 export function registerCatalogRoutes(app: FastifyInstance, service: CatalogService): void {
   app.post(

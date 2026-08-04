@@ -85,15 +85,23 @@ constraint makes the database, not just the application, reject a duplicate
 variant. Clients must treat `variantSignature` as opaque — never construct or
 parse it.
 
-## Authorization (temporary gap)
+## Authorization
 
-Capability enforcement is **not wired yet**: no authenticated principal exists
-because the identity module is still a scaffold. Each route declares the
-capability it will require in its Fastify `config` (`catalog.write` for create,
-`catalog.read` for list), so a single `onRequest` hook can enforce them once
-identity lands, without changing these handlers. **Until then these endpoints are
-unauthenticated.** This is intentional and isolated to this gap; no temporary
-authentication was invented.
+Both routes are **capability-protected**. Each declares what it requires in its
+Fastify `config` — `catalog.write` to create, `catalog.read` to list — and the
+identity module's enforcement hook resolves the session cookie and checks the
+capability before the handler runs. A caller who reaches a handler here is
+signed in and holds the capability.
+
+Neither handler contains an authorization check, and neither knows anybody's
+role: `role_capabilities` decides what a role may do, and business code asks
+only what the caller may do. A request with no valid session is `401`; a signed-in
+caller without the capability is `403`, and the handler is never entered — no
+product is created and no `operations` row is written.
+
+Neither route reads the actor, because creating a product records no `user_id`
+yet. The workflows that do will take it from `requireActor(request)`, never from
+the request body.
 
 ## Not in this PR
 
