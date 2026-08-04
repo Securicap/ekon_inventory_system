@@ -18,6 +18,17 @@ export function messageKeyForError(error: unknown): MessageKey {
     if (error.status === 403) return 'error.forbidden';
     if (error.status === 401) return 'error.sessionExpired';
     if (error.code === 'INSUFFICIENT_STOCK') return 'error.insufficientStock';
+
+    // The same command id was used for a different command. Said as what it is
+    // — the thing that was sent changed after it was sent — because the remedy
+    // is to start again deliberately, and never to send it once more and hope.
+    if (error.code === 'OPERATION_REPLAYED_WITH_DIFFERENT_BODY') return 'error.operationChanged';
+
+    // Chosen from a list that is no longer true. Both mean "pick again from
+    // fresh choices", and neither is anybody's mistake: the catalog can change
+    // between a screen loading and a delivery being entered.
+    if (error.code === 'NOT_FOUND') return 'error.notFound';
+    if (error.code === 'CONFLICT') return 'error.resourceInactive';
   }
 
   return 'error.generic';

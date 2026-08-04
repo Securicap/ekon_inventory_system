@@ -19,6 +19,23 @@ import { uuidv7 } from 'uuidv7';
  * the online-only release safe.
  */
 
+/**
+ * A new operation id: one intended state-changing action, named before it is
+ * attempted.
+ *
+ * UUIDv7, from the same generator the backend uses for every other id. Never a
+ * timestamp, a counter, or a short random string — the id is a primary key in
+ * `operations` and has to be unique across every browser in the shop.
+ *
+ * Call it when an *intent* begins — a form opens, a completed receipt is
+ * followed by another — and never per attempt. Every retry of the same intent
+ * must carry the id the first attempt carried, which is the whole of what makes
+ * a retry safe.
+ */
+export function newOperationId(): string {
+  return uuidv7();
+}
+
 const DRAFT_PREFIX = 'ekon.draft.';
 
 export interface Draft<T> {
