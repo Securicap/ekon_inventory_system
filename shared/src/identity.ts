@@ -9,10 +9,12 @@ import { z } from 'zod';
  * defence. A test compares the pattern below against the constraint in
  * migration 0007, so the two cannot drift apart.
  *
- * Password rules are deliberately *not* here. Hashing is a server concern with
- * a native dependency, and nothing in the browser needs to know the algorithm,
- * its parameters, or the encoded form. They live in the backend identity
- * module.
+ * Password *hashing* is deliberately not here, or anywhere else in this
+ * package. It is a server concern with a native dependency, and nothing in the
+ * browser needs to know the algorithm, its parameters, or the encoded form; it
+ * lives in the backend identity module. The two input-length bounds a login
+ * form has to apply are in `auth.ts`, next to the login contract that uses
+ * them.
  */
 
 /**
