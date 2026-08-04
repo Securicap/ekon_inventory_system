@@ -1,0 +1,89 @@
+import { fireEvent, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import ht from '../../src/i18n/ht.json';
+import { apiFailure, json, mockApi } from '../helpers/fetchMock.js';
+import { locationFixture, productFixture, userResponse } from '../helpers/fixtures.js';
+import { renderApp, settle } from '../helpers/renderApp.js';
+
+/**
+ * A session that ends while somebody is using the application.
+ *
+ * It can end without anybody here doing anything: the twelve hours run out, an
+ * owner revokes the session, or an account is deactivated — and the first the
+ * browser hears of it is a `401` on an ordinary read. What must not happen is a
+ * screen that keeps retrying it, or one that goes on showing stock to somebody
+ * the server no longer recognizes.
+ */
+describe('a session that ends mid-use', () => {
+  it('shows the login screen, and says why, when a protected read is refused', async () => {
+    mockApi({
+      'GET /api/auth/me': json(userResponse()),
+      'GET /api/catalog/products': apiFailure('UNAUTHENTICATED', 401),
+    });
+    renderApp();
+    await screen.findByText('Marie Joseph');
+
+    fireEvent.click(screen.getByRole('button', { name: ht['nav.products'] }));
+
+    expect(await screen.findByLabelText(ht['auth.username'])).toBeInTheDocument();
+    // This browser watched the session end, so it can say so honestly.
+    expect(screen.getByText(ht['error.sessionExpired'])).toBeInTheDocument();
+  });
+
+  it('removes the protected screen and the person it was showing', async () => {
+    mockApi({
+      'GET /api/auth/me': json(userResponse()),
+      'GET /api/catalog/products': apiFailure('SESSION_EXPIRED', 401),
+    });
+    renderApp();
+    await screen.findByText('Marie Joseph');
+
+    fireEvent.click(screen.getByRole('button', { name: ht['nav.products'] }));
+    await screen.findByLabelText(ht['auth.username']);
+
+    expect(screen.queryByText('Marie Joseph')).toBeNull();
+    expect(screen.queryByRole('navigation')).toBeNull();
+    expect(screen.queryByRole('button', { name: ht['auth.signOut'] })).toBeNull();
+  });
+
+  it('does not loop: the refused read is asked once and dropped', async () => {
+    const api = mockApi({
+      'GET /api/auth/me': json(userResponse()),
+      'GET /api/catalog/products': apiFailure('UNAUTHENTICATED', 401),
+    });
+    const { queryClient } = renderApp();
+    await screen.findByText('Marie Joseph');
+
+    fireEvent.click(screen.getByRole('button', { name: ht['nav.products'] }));
+    await screen.findByLabelText(ht['auth.username']);
+    await settle();
+
+    expect(api.to('GET /api/catalog/products')).toHaveLength(1);
+    // Nor does it re-ask who is signed in: the 401 already answered that.
+    expect(api.to('GET /api/auth/me')).toHaveLength(1);
+    expect(queryClient.getQueryData(['catalog', 'products'])).toBeUndefined();
+  });
+
+  it('leaves nothing a signed-out browser could still read', async () => {
+    mockApi({
+      'GET /api/auth/me': json(userResponse()),
+      'GET /api/inventory/locations': json([locationFixture({ name: 'Main Store' })]),
+      'GET /api/catalog/products': [json([productFixture()]), apiFailure('UNAUTHENTICATED', 401)],
+    });
+    const { queryClient } = renderApp();
+    await screen.findByText('Marie Joseph');
+
+    // Read two screens, then have the session end on the third request.
+    fireEvent.click(screen.getByRole('button', { name: ht['nav.stock'] }));
+    await screen.findByText('Main Store');
+    fireEvent.click(screen.getByRole('button', { name: ht['nav.products'] }));
+    await screen.findByText('Diri');
+
+    void queryClient.refetchQueries({ queryKey: ['catalog', 'products'] });
+
+    await screen.findByLabelText(ht['auth.username']);
+    expect(queryClient.getQueryData(['inventory', 'locations'])).toBeUndefined();
+    expect(queryClient.getQueryData(['catalog', 'products'])).toBeUndefined();
+    expect(screen.queryByText('Main Store')).toBeNull();
+  });
+});
