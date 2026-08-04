@@ -38,6 +38,19 @@ interface AttributeRow {
   attribute_value: string;
 }
 
+/**
+ * A variant, as a module that is about to move stock against it needs to see
+ * it. Not a wire type: it crosses a module boundary inside the backend, never
+ * the network, so it carries no timestamps, no SKU, and no attributes.
+ */
+export interface StockableVariant {
+  id: string;
+  /** The product this variant belongs to. The relationship, not a lookup. */
+  productId: string;
+  /** Variants deactivate rather than delete once they carry stock history. */
+  isActive: boolean;
+}
+
 export interface InsertProductParams {
   id: string;
   name: string;
@@ -211,6 +224,29 @@ export async function getProductById(db: Queryable, id: string): Promise<Product
     productRow,
     variantRows.map((row) => toVariant(row, attributesByVariant.get(row.id) ?? [])),
   );
+}
+
+/**
+ * Reads the one thing another module needs to know before it puts stock against
+ * a variant: whether it exists, and whether it is still stockable.
+ *
+ * Deliberately not `getProductById` — a workflow that only has to decide
+ * "may I receive against this?" has no use for the product's other variants,
+ * their SKUs, or anybody's attributes, and loading them would make an inventory
+ * write pay for a catalog read it never looks at. One row, three columns.
+ */
+export async function findStockableVariant(
+  db: Queryable,
+  variantId: string,
+): Promise<StockableVariant | null> {
+  const { rows } = await db.query<Pick<VariantRow, 'id' | 'product_id' | 'is_active'>>(
+    `SELECT id, product_id, is_active
+       FROM product_variants
+      WHERE id = $1`,
+    [variantId],
+  );
+  const row = rows[0];
+  return row ? { id: row.id, productId: row.product_id, isActive: row.is_active } : null;
 }
 
 function toProduct(row: ProductRow, variants: ProductVariant[]): Product {

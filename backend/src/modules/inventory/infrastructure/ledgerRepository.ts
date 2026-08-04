@@ -1,5 +1,5 @@
 import type { MovementType } from '@ekon/shared';
-import type { DatabaseClient } from '../../../platform/db/pool.js';
+import type { DatabaseClient, DatabasePool } from '../../../platform/db/pool.js';
 import { AppError } from '../../../platform/http/errors.js';
 
 /**
@@ -7,14 +7,23 @@ import { AppError } from '../../../platform/http/errors.js';
  * `inventory_balances` tables. Hand-written SQL, typed row shapes kept internal
  * to the backend, and mapping done in one place.
  *
- * Every function here takes a transaction client, never the pool. That is not
+ * **Every write here takes a transaction client, never the pool.** That is not
  * an accident of the current call site: a movement insert, its balance update,
  * and its operation row have to commit together or not at all (INV-5), so there
  * is deliberately no pool-level variant to reach for.
  *
+ * The two single-row *reads* used to answer a replay accept either, because
+ * they are read-only, take no lock, and are correct at whichever isolation the
+ * caller is already in — inside the posting transaction they must run on that
+ * transaction's client, and the pre-transaction replay lookup has no
+ * transaction to run in. No write is widened this way, and none should be.
+ *
  * There is no update or delete of a movement row here, and there never will be
  * — the database refuses both (INV-1). Corrections are compensating movements.
  */
+
+/** Read-only access: the pool, or a transaction already in progress. */
+type Queryable = DatabasePool | DatabaseClient;
 
 /** Marks an `operations` row whose result is an inventory movement. */
 export const MOVEMENT_RESULT_RESOURCE_TYPE = 'inventory_movement';
@@ -145,11 +154,8 @@ export async function claimOperation(
   return rows.length === 1;
 }
 
-export async function getOperation(
-  tx: DatabaseClient,
-  id: string,
-): Promise<StoredOperation | null> {
-  const { rows } = await tx.query<OperationRow>(
+export async function getOperation(db: Queryable, id: string): Promise<StoredOperation | null> {
+  const { rows } = await db.query<OperationRow>(
     `SELECT id, operation_type, request_hash, result_resource_type, result_resource_id
        FROM operations
       WHERE id = $1`,
@@ -311,11 +317,8 @@ export async function insertMovement(
 }
 
 /** Reads one movement back, used to answer a replayed operation. */
-export async function getMovementById(
-  tx: DatabaseClient,
-  id: string,
-): Promise<PostedMovement | null> {
-  const { rows } = await tx.query<MovementRow>(
+export async function getMovementById(db: Queryable, id: string): Promise<PostedMovement | null> {
+  const { rows } = await db.query<MovementRow>(
     `SELECT id, variant_id, location_id, movement_type,
             quantity_delta, quantity_before, quantity_after,
             previous_movement_id, reverses_movement_id, operation_id,

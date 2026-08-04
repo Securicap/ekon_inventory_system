@@ -6,7 +6,7 @@ import { loadConfig } from '../../src/config/index.js';
 import { fixedClock } from '../../src/platform/clock/index.js';
 import { newId } from '../../src/platform/ids/uuidv7.js';
 import { registerInventoryRoutes } from '../../src/modules/inventory/routes.js';
-import type { InventoryService } from '../../src/modules/inventory/index.js';
+import type { InventoryService, ReceivingService } from '../../src/modules/inventory/index.js';
 import { createTestSession, type TestSession } from '../helpers/authSession.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
 
@@ -196,8 +196,13 @@ describe('inventory route capability declaration', () => {
       }
     });
 
-    const stubService: InventoryService = { listLocations: async () => [] };
-    registerInventoryRoutes(app, stubService);
+    const inventory: InventoryService = { listLocations: async () => [] };
+    const receiving: ReceivingService = {
+      receiveStock: async () => {
+        throw new Error('not called');
+      },
+    };
+    registerInventoryRoutes(app, { inventory, receiving });
 
     expect(capturedConfig?.capability).toBe('inventory.read');
     await app.close();

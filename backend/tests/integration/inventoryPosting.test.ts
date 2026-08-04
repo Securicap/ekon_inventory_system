@@ -855,3 +855,79 @@ describe('a command that fails after claiming its operation', () => {
     expect(balance!.last_movement_id).toBe(opening.id);
   });
 });
+
+describe('looking up what an operation already produced', () => {
+  /**
+   * The read-only half of replay, used by a workflow *before* it validates
+   * anything about the present. It claims nothing and posts nothing: it is a
+   * shortcut to an answer the engine already holds, and every question about
+   * ownership still goes through the transactional claim.
+   */
+  function claimOf(input: PostMovementCommand) {
+    return {
+      operationId: input.operationId,
+      operationType: input.operationType,
+      requestHash: input.requestHash,
+    };
+  }
+
+  it('returns nothing for an operation id that has never been used', async () => {
+    const chain = await newChain();
+    expect(await ledger.findCompletedMovement(claimOf(command(chain)))).toBeNull();
+  });
+
+  it('returns the movement a completed operation produced', async () => {
+    const chain = await newChain();
+    const input = command(chain, { quantityDelta: 4 });
+    const posted = await ledger.postMovement(input);
+
+    const found = await ledger.findCompletedMovement(claimOf(input));
+    expect(found).toEqual(posted);
+    // Reading is not posting: nothing moved, and no id was minted for it.
+    expect(await countMovements(chain)).toBe(1);
+    expect(generatedIds).toHaveLength(1);
+  });
+
+  it('refuses an operation id reused for a different request', async () => {
+    const chain = await newChain();
+    const input = command(chain, { quantityDelta: 4 });
+    await ledger.postMovement(input);
+
+    let thrown: unknown;
+    try {
+      await ledger.findCompletedMovement({ ...claimOf(input), requestHash: 'b'.repeat(64) });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('OPERATION_REPLAYED_WITH_DIFFERENT_BODY');
+  });
+
+  it('refuses an operation id reused for a different workflow', async () => {
+    const chain = await newChain();
+    const input = command(chain, { quantityDelta: 4 });
+    await ledger.postMovement(input);
+
+    let thrown: unknown;
+    try {
+      await ledger.findCompletedMovement({ ...claimOf(input), operationType: 'inventory.count' });
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as AppError).code).toBe('OPERATION_REPLAYED_WITH_DIFFERENT_BODY');
+  });
+
+  it('returns nothing while an operation is claimed but not yet complete', async () => {
+    // Committed rows only. An operation whose result has not landed is not an
+    // answer to anybody — reporting a movement that then rolled back would be
+    // worse than waiting for the claim to decide.
+    const chain = await newChain();
+    const input = command(chain);
+    await db.pool.query(
+      `INSERT INTO operations (id, operation_type, request_hash, created_at) VALUES ($1, $2, $3, $4)`,
+      [input.operationId, input.operationType, input.requestHash, RECORDED_AT],
+    );
+
+    expect(await ledger.findCompletedMovement(claimOf(input))).toBeNull();
+  });
+});

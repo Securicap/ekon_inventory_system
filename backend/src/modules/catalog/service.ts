@@ -12,6 +12,7 @@ import {
   type NormalizedAttribute,
 } from './domain/variantSignature.js';
 import {
+  findStockableVariant,
   getProductById,
   insertProduct,
   insertVariant,
@@ -20,6 +21,7 @@ import {
   uniqueViolationConstraint,
   VARIANT_SIGNATURE_UNIQUE_CONSTRAINT,
   VARIANT_SKU_UNIQUE_CONSTRAINT,
+  type StockableVariant,
 } from './infrastructure/catalogRepository.js';
 
 /**
@@ -40,6 +42,18 @@ export interface CatalogServiceDeps {
 export interface CatalogService {
   createProduct(input: CreateProductRequest): Promise<Product>;
   listProducts(): Promise<Product[]>;
+  /**
+   * Whether a variant exists and may still be stocked. `null` when there is no
+   * such variant.
+   *
+   * This is how the inventory module asks about a variant. It does not — and by
+   * lint rule cannot — query `product_variants` itself: the catalog owns those
+   * tables, so the question crosses the boundary as a call rather than as a
+   * join. It answers only what a stock workflow has to decide before it posts,
+   * and deliberately does not decide it: whether an inactive variant is a `404`
+   * or a `409` is the calling workflow's rule, not the catalog's.
+   */
+  findStockableVariant(variantId: string): Promise<StockableVariant | null>;
 }
 
 /** A SKU collision is astronomically unlikely; a few retries is ample and bounded. */
@@ -125,7 +139,11 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
     throw conflict('Could not allocate a unique SKU after several attempts');
   }
 
-  return { createProduct, listProducts };
+  return {
+    createProduct,
+    listProducts,
+    findStockableVariant: (variantId) => findStockableVariant(pool, variantId),
+  };
 }
 
 interface PreparedVariant {

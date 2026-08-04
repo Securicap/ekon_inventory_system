@@ -7,7 +7,10 @@ information remotely from another country.
 **Status:** Sprint 0 complete. Business capabilities in progress — the `catalog`
 module can create and list stockable products with server-generated SKUs
 ([backend/src/modules/catalog](backend/src/modules/catalog/README.md)), and the
-`inventory` module lists inventory locations with one seeded default
+`inventory` module lists inventory locations, holds the append-only movement
+ledger, and now **records stock arriving**: `POST /api/inventory/receive` books
+in one variant at one location, through the posting engine, with retries that
+apply once
 ([backend/src/modules/inventory](backend/src/modules/inventory/README.md)). The
 `identity` module holds the users, sessions, and role-capability schema, the
 first-owner bootstrap command, and now **session authentication** — sign in,
@@ -23,9 +26,10 @@ capability.
 The application is now **usable from a browser**: sign in, stay signed in
 through the session cookie, read the catalog and the inventory locations, and
 sign out ([frontend](frontend/README.md)). The screens are a temporary shell,
-not the platform's visual design — no dashboard, no design system. **Receiving
-is next**, and it is the first end-to-end inventory workflow; production
-deployment is reviewed after it works.
+not the platform's visual design — no dashboard, no design system. Receiving
+exists as a backend workflow and an endpoint; **the receiving screen is next**,
+and it makes the first inventory workflow usable end to end. Production
+deployment is reviewed after that works.
 
 ---
 

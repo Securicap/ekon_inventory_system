@@ -23,3 +23,10 @@ export function registerCatalog(
 
 export { createCatalogService } from './service.js';
 export type { CatalogService } from './service.js';
+
+/**
+ * What a variant looks like to a module that is about to move stock against it.
+ * Re-exported here so the inventory module can name the type without reaching
+ * into `infrastructure/`.
+ */
+export type { StockableVariant } from './infrastructure/catalogRepository.js';
