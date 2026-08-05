@@ -196,7 +196,10 @@ describe('inventory route capability declaration', () => {
       }
     });
 
-    const inventory: InventoryService = { listLocations: async () => [] };
+    const inventory: InventoryService = {
+      listLocations: async () => [],
+      listStockBalances: async () => [],
+    };
     const receiving: ReceivingService = {
       receiveStock: async () => {
         throw new Error('not called');

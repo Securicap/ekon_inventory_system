@@ -49,6 +49,27 @@ their attributes. An empty catalog is an empty array. Ordering is deterministic
 The whole catalog is read in a fixed number of queries — no N+1. No pagination,
 filtering, search, or sorting yet.
 
+## What other modules ask this one
+
+The catalog owns `products`, `product_variants`, and `variant_attributes`, and
+no other module may query them — the lint rule enforces it. Two questions cross
+that boundary today, both as calls on `CatalogService`, and neither of them
+decides anything about stock:
+
+- `findStockableVariant(id)` — does this variant exist, and may it still be
+  stocked? Asked by receiving before it posts. One row, three columns.
+- `listStockableVariants()` — every variant that may currently be stocked, with
+  the product name, SKU, and attributes needed to label one. Asked by the
+  inventory module to build the current stock view, which composes it with its
+  own locations and balances.
+
+Both are filtered to the **active**, and `listStockableVariants` gates a variant
+on its parent product's `is_active` as well as its own: an active variant under a
+withdrawn product is not something the business sells. Neither returns
+`is_active` itself, because there is nothing left for the caller to decide.
+Ordering for the list is fixed here — product name, SKU, then variant id — so
+every consumer sees the same one.
+
 ## SKU format and immutability
 
 - Format: `EKN-XXXXXXXX` — eight uppercase, non-semantic characters from an
@@ -103,9 +124,10 @@ Neither route reads the actor, because creating a product records no `user_id`
 yet. The workflows that do will take it from `requireActor(request)`, never from
 the request body.
 
-## Not in this PR
+## Not yet
 
 Deactivation (products/variants carry `is_active` but nothing sets it to false
-yet), product/variant updates, deletion, pagination/filtering/search, controlled
-vocabularies or attribute-definition tables, barcodes/labels, and anything to do
-with inventory movements, balances, or the audit log.
+yet — the reads above already honour it, so the workflow that lands it changes
+nothing here), product/variant updates, deletion, pagination/filtering/search,
+controlled vocabularies or attribute-definition tables, barcodes/labels, and
+anything to do with inventory movements, balances, or the audit log.

@@ -51,6 +51,30 @@ export interface StockableVariant {
   isActive: boolean;
 }
 
+/**
+ * A variant that may currently be stocked, as a module presenting stock needs
+ * to label it: the identity, the product it belongs to, its SKU, and the
+ * attributes that tell two variants of one product apart.
+ *
+ * Wider than `StockableVariant` because the question is a different one. That
+ * type answers "may I post against this?" for a single id; this one answers
+ * "what is currently stockable, and what do I call each of them?" for all of
+ * them at once. Neither carries `is_active`: both are already filtered to the
+ * active, so a consumer has nothing left to decide.
+ *
+ * Not a wire type either. It crosses a module boundary inside the backend; the
+ * module that presents it owns the mapping to whatever crosses the network.
+ */
+export interface StockableVariantListing {
+  id: string;
+  productId: string;
+  /** The parent product's name. The relationship resolved, not a lookup. */
+  productName: string;
+  sku: string;
+  /** Deterministically ordered by normalized attribute name, as everywhere else. */
+  attributes: VariantAttribute[];
+}
+
 export interface InsertProductParams {
   id: string;
   name: string;
@@ -166,12 +190,7 @@ export async function listCatalog(db: Queryable): Promise<Product[]> {
       ORDER BY variant_id, attribute_name`,
   );
 
-  const attributesByVariant = new Map<string, VariantAttribute[]>();
-  for (const row of attributeRows) {
-    const list = attributesByVariant.get(row.variant_id) ?? [];
-    list.push({ name: row.attribute_name, value: row.attribute_value });
-    attributesByVariant.set(row.variant_id, list);
-  }
+  const attributesByVariant = groupAttributes(attributeRows);
 
   const variantsByProduct = new Map<string, ProductVariant[]>();
   for (const row of variantRows) {
@@ -213,12 +232,7 @@ export async function getProductById(db: Queryable, id: string): Promise<Product
     [variantRows.map((row) => row.id)],
   );
 
-  const attributesByVariant = new Map<string, VariantAttribute[]>();
-  for (const row of attributeRows) {
-    const list = attributesByVariant.get(row.variant_id) ?? [];
-    list.push({ name: row.attribute_name, value: row.attribute_value });
-    attributesByVariant.set(row.variant_id, list);
-  }
+  const attributesByVariant = groupAttributes(attributeRows);
 
   return toProduct(
     productRow,
@@ -247,6 +261,73 @@ export async function findStockableVariant(
   );
   const row = rows[0];
   return row ? { id: row.id, productId: row.product_id, isActive: row.is_active } : null;
+}
+
+/**
+ * Every variant that may currently be stocked — active variants of active
+ * products — with the product name, SKU, and attributes needed to label it.
+ *
+ * This is how the inventory module gets the *left-hand side* of the current
+ * stock picture. It cannot query `product_variants` itself (the catalog owns
+ * those tables, and the lint rule enforces it), so the question crosses the
+ * boundary as a call, exactly as `findStockableVariant` does for a single id.
+ *
+ * **A product's `is_active` gates its variants here.** An active variant under a
+ * retired product is not stockable, and showing it on a stock screen would
+ * present something the business has withdrawn as something it still sells. The
+ * ledger history of both is untouched and stays readable — this filters a
+ * present-tense operational view, it does not hide the past.
+ *
+ * Two queries regardless of catalog size, never one per variant. Ordering is
+ * fixed here rather than left to the caller: product name, then SKU, then id as
+ * the final tie-breaker, so two products of the same name and two variants of
+ * the same product still come back in one stable order.
+ */
+export async function listStockableVariants(db: Queryable): Promise<StockableVariantListing[]> {
+  const { rows: variantRows } = await db.query<
+    Pick<VariantRow, 'id' | 'product_id' | 'sku'> & { product_name: string }
+  >(
+    `SELECT v.id, v.product_id, v.sku, p.name AS product_name
+       FROM product_variants v
+       JOIN products p ON p.id = v.product_id
+      WHERE v.is_active AND p.is_active
+      ORDER BY p.name, v.sku, v.id`,
+  );
+
+  if (variantRows.length === 0) return [];
+
+  const { rows: attributeRows } = await db.query<AttributeRow>(
+    `SELECT variant_id, attribute_name, attribute_value
+       FROM variant_attributes
+      WHERE variant_id = ANY($1)
+      ORDER BY variant_id, attribute_name`,
+    [variantRows.map((row) => row.id)],
+  );
+
+  const attributesByVariant = groupAttributes(attributeRows);
+
+  return variantRows.map((row) => ({
+    id: row.id,
+    productId: row.product_id,
+    productName: row.product_name,
+    sku: row.sku,
+    attributes: attributesByVariant.get(row.id) ?? [],
+  }));
+}
+
+/**
+ * Indexes attribute rows by variant, preserving the order they arrived in —
+ * which every query above fixes with `ORDER BY variant_id, attribute_name`, so
+ * a variant's attributes are in the same order wherever they are returned.
+ */
+function groupAttributes(rows: AttributeRow[]): Map<string, VariantAttribute[]> {
+  const byVariant = new Map<string, VariantAttribute[]>();
+  for (const row of rows) {
+    const list = byVariant.get(row.variant_id) ?? [];
+    list.push({ name: row.attribute_name, value: row.attribute_value });
+    byVariant.set(row.variant_id, list);
+  }
+  return byVariant;
 }
 
 function toProduct(row: ProductRow, variants: ProductVariant[]): Product {

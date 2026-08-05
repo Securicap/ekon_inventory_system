@@ -33,6 +33,12 @@ the balance projection, and every rule that protects them.
   first production caller of the posting engine, and the first thing in the
   system that puts a row in the ledger. Adjustments, counts, and reversal are
   the workflows that follow, each in its own PR.
+- **The current stock read** (`service.ts`,
+  `infrastructure/balanceRepository.ts`) and `GET /api/inventory/balances` —
+  how many units of every active variant are held at every active location,
+  read from the balance projection. Requires `inventory.read`. It is the first
+  thing that reads the ledger's projection out to a screen, and it writes
+  nothing.
 
 ## The posting engine
 
@@ -358,6 +364,173 @@ an anonymous request with a malformed body is `401` before anything in it is
 parsed — answering `400` would tell a caller who is nobody which fields the
 endpoint expects.
 
+## Current stock
+
+`GET /api/inventory/balances` answers the question the counter asks all day:
+**how many units of every active variant are held at every active location.**
+
+It is an **operational current-state view**, not a report and not history. There
+is no date range, no valuation, no movement list, and no export. The ledger
+remains the record of how the numbers got there, and nothing in this response
+exposes any of it.
+
+Requires the **`inventory.read`** capability, declared in the route's Fastify
+`config` and enforced by the identity module before the handler runs: no session
+is `401`, a session without the capability is `403`, and a `403` does not sign
+anybody out. The route parses nothing, checks nothing, and knows nobody's role —
+it calls the inventory service and sends what it gets.
+
+```jsonc
+// 200 OK
+[
+  {
+    "variantId": "0198f0a0-…",
+    "productId": "0198f0a0-…",
+    "productName": "Bottled Water",
+    "sku": "EKN-A2B3C4D5",
+    "attributes": [{ "name": "size", "value": "1L" }],
+    "totalQuantity": 17,
+    "locations": [
+      {
+        "locationId": "0198f0a0-…",
+        "locationName": "Main Store",
+        "isDefault": true,
+        "quantity": 5,
+        "updatedAt": "2026-08-03T12:00:00.000Z",
+      },
+      {
+        "locationId": "0198f0a0-…",
+        "locationName": "Backroom",
+        "isDefault": false,
+        "quantity": 12,
+        "updatedAt": "2026-08-03T12:00:00.000Z",
+      },
+    ],
+  },
+]
+```
+
+**No query parameters in this version.** No pagination, filtering, sorting, or
+search — the whole active picture is a small bounded matrix for one shop, and
+each of those is a decision better made against a real screen than guessed at
+now.
+
+### `inventory_balances` is the answer; the ledger is not consulted
+
+`quantity_on_hand` is the authoritative current-stock projection, maintained in
+the same transaction as the movement that changes it. This endpoint reads it as
+it stands and **never sums `inventory_movements`** to derive a current quantity.
+An integration test forces the two apart — it moves a balance row away from what
+its movements add up to — and asserts the response follows the projection, which
+is the only way to tell the two implementations apart when they agree.
+
+`totalQuantity` is summed **in the response mapping**, from the location
+quantities beside it. There is no total-stock column, no second projection, and
+no second query: a total kept anywhere other than in the numbers it totals is a
+number that can disagree with them.
+
+### Zero stock, and the two kinds of zero
+
+Every active variant is returned **whether or not it has ever held stock**, with
+one entry for every active location. A variant with no movements and no balance
+row at all is exactly the item somebody is looking for when they ask why nothing
+was ever booked in against it, and an answer that omitted it would be read as
+"we have none" rather than "nobody has ever recorded any".
+
+An **absent balance row means zero.** Where there is no row:
+
+```jsonc
+{ "quantity": 0, "updatedAt": null }
+```
+
+`updatedAt` is what distinguishes the two zeroes, and both are real states:
+
+| The shelf                             | `quantity` | `updatedAt`    |
+| ------------------------------------- | ---------- | -------------- |
+| has never held stock — no balance row | `0`        | `null`         |
+| held stock and was drawn back to zero | `0`        | the row's time |
+
+Nothing is written to answer a read. **No zero balance rows are created**, no
+timestamps are stamped, and the current time is never substituted for a missing
+one — a fabricated `updated_at` would claim a moment at which nothing happened.
+A product's, variant's, or location's own `updated_at` is not a substitute
+either: it answers a different question.
+
+### Active only, and history is untouched
+
+Only **active products, active variants, and active locations** appear. An
+active variant under a retired product does not: the product has been withdrawn,
+and presenting it on a stock screen would offer something the business no longer
+sells.
+
+This filters a present-tense operational view. **It changes and deletes
+nothing** — every movement and every balance row of a retired item stays exactly
+as it was, and stock sitting at a closed location is still on that shelf in the
+database. It is simply not part of what the shop is asked to act on today, and
+therefore not part of the totals.
+
+Two empty states, both `200`:
+
+- **no active variants** — `[]`, whatever locations exist;
+- **no active locations** — every active variant, with `locations: []` and
+  `totalQuantity: 0`. Nowhere to put stock is an operational problem for a
+  screen to surface, not a server error.
+
+### Ordering
+
+Deterministic throughout, from `ORDER BY`, never from insertion order:
+
+- **variants** — product name, then SKU, then variant id as the final
+  tie-breaker;
+- **locations within a variant** — the default location first, then by name,
+  then by location id.
+
+Attributes keep the catalog's existing order (normalized name), and are passed
+through unchanged — never renamed, re-cased, or rebuilt here.
+
+### Where the query goes, and how many there are
+
+Products, variants, SKUs, and attributes belong to the **catalog** module;
+locations and balances belong to this one. So the read is composed in the
+**inventory application service** from three calls, not written as one
+cross-module join — the same boundary receiving already respects when it asks
+`catalogService.findStockableVariant` instead of querying `product_variants`:
+
+1. `catalogService.listStockableVariants()` — active variants of active
+   products, with product name, SKU, and attributes, already ordered (two
+   queries inside the catalog: variants joined to products, then their
+   attributes);
+2. `listActiveLocations` — this module's active locations, already ordered;
+3. `listBalancesForVariants` — this module's balance rows for exactly those
+   variants.
+
+The matrix is then built in memory: `active variants × active locations`, with
+each cell filled from the balance row if there is one and zero if there is not.
+The shape is a `LEFT JOIN` onto `inventory_balances`, and it is deliberately
+**driven by the catalog rather than by the balance table** — starting from
+`inventory_balances` would silently drop every never-stocked variant.
+
+**Three queries whatever the size of the catalog** (an empty catalog issues one
+and stops). Never one per variant or per location: four hundred variants across
+three locations is still three statements.
+
+Reading is kept out of the posting engine's repository. Every function in
+`ledgerRepository.ts` takes a transaction client because a movement and its
+balance must commit together; the read side lives in `balanceRepository.ts`,
+which takes the pool, holds no transaction, takes no lock, and creates nothing.
+`inventory_balances` is still written in exactly one place.
+
+### Concurrency
+
+An ordinary committed read at the existing isolation level — no row locks, no
+advisory locks, no retry loop, no isolation change, and no cache. A request may
+observe stock from just before or just after a concurrent receipt commits, which
+is what "current" means. It cannot observe half of one: the movement insert and
+the balance update commit together, so a receipt is either wholly visible or not
+visible at all.
+
+**No schema change was needed for any of this**, and none was made.
+
 ## Ledger schema (enforced today, in the database)
 
 - **Append-only.** `BEFORE UPDATE`, `BEFORE DELETE`, and `BEFORE TRUNCATE`
@@ -400,12 +573,21 @@ endpoint expects.
 
 ## Deferred (future PRs)
 
-Adjustments, physical counts, public reversal, and the balance API. Reversal
-posting itself. Transfers, multi-location stock behaviour, and location
-management (create / rename / deactivate). Offline sync remains deferred too.
+Adjustments, physical counts, and public reversal. Reversal posting itself.
+Transfers, multi-location stock behaviour, and location management (create /
+rename / deactivate). Offline sync remains deferred too.
 
-The **receiving screen** now exists and calls this endpoint — see
-[frontend/README.md](../../../../frontend/README.md).
+The **receiving screen** now exists and calls `POST /api/inventory/receive` —
+see [frontend/README.md](../../../../frontend/README.md). The **stock screen**
+that reads `GET /api/inventory/balances` is the next PR; this one is backend and
+shared-contract work only.
+
+Deferred with the stock read specifically: movement history and any history
+endpoint, low-stock thresholds, reserved stock and available-to-promise, costs
+and valuation, pagination, server-side search and filtering, exports, caching,
+and background refresh. None of them is needed to answer what is on the shelf
+today, and several of them would quietly turn an operational read into a
+reporting system.
 
 Deferred with receiving specifically, and deliberately: suppliers, purchase
 orders, invoices, costs, shipment records, receiving statuses, draft receipts,

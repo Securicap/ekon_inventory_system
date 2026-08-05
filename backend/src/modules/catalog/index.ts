@@ -25,8 +25,12 @@ export { createCatalogService } from './service.js';
 export type { CatalogService } from './service.js';
 
 /**
- * What a variant looks like to a module that is about to move stock against it.
- * Re-exported here so the inventory module can name the type without reaching
- * into `infrastructure/`.
+ * What a variant looks like to a module that is about to move stock against it,
+ * and what the currently stockable ones look like to a module that has to
+ * present them. Re-exported here so the inventory module can name both types
+ * without reaching into `infrastructure/`.
  */
-export type { StockableVariant } from './infrastructure/catalogRepository.js';
+export type {
+  StockableVariant,
+  StockableVariantListing,
+} from './infrastructure/catalogRepository.js';
