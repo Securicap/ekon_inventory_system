@@ -510,9 +510,11 @@ The shape is a `LEFT JOIN` onto `inventory_balances`, and it is deliberately
 **driven by the catalog rather than by the balance table** — starting from
 `inventory_balances` would silently drop every never-stocked variant.
 
-**Three queries whatever the size of the catalog** (an empty catalog issues one
-and stops). Never one per variant or per location: four hundred variants across
-three locations is still three statements.
+**Four bounded SQL statements for a non-empty catalog, and one when no stockable
+variants exist** — the catalog read answers nothing, so neither of this module's
+reads is issued. The count is constant with respect to catalog and location
+size: there is no query per variant or per location and no N+1 behaviour. Four
+hundred variants across three locations is still four statements.
 
 Reading is kept out of the posting engine's repository. Every function in
 `ledgerRepository.ts` takes a transaction client because a movement and its
