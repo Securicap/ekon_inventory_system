@@ -5,14 +5,15 @@ import type { ReceivingService } from './receivingService.js';
 import type { InventoryService } from './service.js';
 
 /**
- * Inventory HTTP surface: reading locations, and booking in stock that arrived.
+ * Inventory HTTP surface: reading locations, reading current stock, and booking
+ * in stock that arrived.
  *
  * Each route declares the capability it needs, and the identity module's
  * enforcement hook resolves the session and checks that capability before the
  * handler runs. Anyone who reaches a handler here is signed in and permitted;
  * this file contains no authorization check and no notion of a role.
  *
- * Both handlers are deliberately dull. HTTP concerns only: parse the body with
+ * Every handler is deliberately dull. HTTP concerns only: parse the body with
  * the shared schema, take the person from the session, call the application
  * service, choose a status code. The receiving rules — what may be received,
  * what the command hashes to, what movement it becomes — live in the receiving
@@ -30,6 +31,28 @@ export function registerInventoryRoutes(
     async (_request, reply) => {
       const locations = await services.inventory.listLocations();
       return reply.status(200).send(locations);
+    },
+  );
+
+  /**
+   * What the business currently holds: every active variant, and its quantity at
+   * every active location.
+   *
+   * An ordinary read of the balance projection. No query parameters in this
+   * version — no page, filter, sort, or search — so there is nothing to parse
+   * and nothing to validate; the handler asks the service and sends what it
+   * gets. An empty catalog answers `200` with `[]`, because "we stock nothing"
+   * is an answer rather than a missing resource.
+   *
+   * Nothing here writes, and the service it calls holds no transaction, takes no
+   * lock, and creates no balance rows.
+   */
+  app.get(
+    '/api/inventory/balances',
+    { config: { capability: 'inventory.read' } },
+    async (_request, reply) => {
+      const balances = await services.inventory.listStockBalances();
+      return reply.status(200).send(balances);
     },
   );
 

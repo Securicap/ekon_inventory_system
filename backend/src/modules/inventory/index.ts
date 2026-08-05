@@ -20,13 +20,14 @@ import { createInventoryService, type InventoryService } from './service.js';
  *
  * The catalog service is a dependency rather than a set of tables: variants
  * belong to the catalog module, so receiving asks it whether one may be stocked
- * instead of reaching across the boundary into `product_variants`.
+ * instead of reaching across the boundary into `product_variants`, and the stock
+ * read asks it what is currently stockable instead of joining to `products`.
  */
 export function registerInventory(
   app: FastifyInstance,
   deps: { pool: DatabasePool; clock: Clock; catalog: CatalogService },
 ): { inventory: InventoryService; ledger: LedgerService; receiving: ReceivingService } {
-  const inventory = createInventoryService(deps);
+  const inventory = createInventoryService({ pool: deps.pool, catalog: deps.catalog });
   const ledger = createLedgerService({ pool: deps.pool, clock: deps.clock });
   const receiving = createReceivingService({ pool: deps.pool, ledger, catalog: deps.catalog });
 
@@ -36,7 +37,7 @@ export function registerInventory(
 }
 
 export { createInventoryService } from './service.js';
-export type { InventoryService } from './service.js';
+export type { InventoryService, InventoryServiceDeps } from './service.js';
 
 export { createLedgerService } from './ledgerService.js';
 export type {

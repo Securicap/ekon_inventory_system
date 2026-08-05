@@ -29,6 +29,16 @@ export interface StockableLocation {
 }
 
 /**
+ * A location as a stock view needs to label it: no timestamps, and no
+ * `is_active`, because the list is already filtered to the active ones.
+ */
+export interface ActiveLocation {
+  id: string;
+  name: string;
+  isDefault: boolean;
+}
+
+/**
  * Lists every location, active and inactive. Deterministic order: the default
  * location first, then by creation time, then by id as a stable tie-breaker.
  */
@@ -39,6 +49,29 @@ export async function listLocations(db: Queryable): Promise<InventoryLocation[]>
       ORDER BY is_default DESC, created_at, id`,
   );
   return rows.map(toLocation);
+}
+
+/**
+ * The places stock may currently sit — active locations only.
+ *
+ * Deliberately a different query from `listLocations`, not a filter applied to
+ * its result. That one is the location *screen*, which must show a closed
+ * location so somebody can see it is closed; this one is the set of shelves an
+ * operational stock view is about, and a closed shelf is not one of them.
+ *
+ * Ordered default first, then by name, then by id — the order these appear in
+ * within each variant. By name rather than by creation time, because this list
+ * is read as columns of a grid by somebody who is looking for a place they know
+ * the name of.
+ */
+export async function listActiveLocations(db: Queryable): Promise<ActiveLocation[]> {
+  const { rows } = await db.query<Pick<LocationRow, 'id' | 'name' | 'is_default'>>(
+    `SELECT id, name, is_default
+       FROM inventory_locations
+      WHERE is_active
+      ORDER BY is_default DESC, name, id`,
+  );
+  return rows.map((row) => ({ id: row.id, name: row.name, isDefault: row.is_default }));
 }
 
 /**

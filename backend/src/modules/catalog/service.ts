@@ -18,10 +18,12 @@ import {
   insertVariant,
   insertVariantAttributes,
   listCatalog,
+  listStockableVariants,
   uniqueViolationConstraint,
   VARIANT_SIGNATURE_UNIQUE_CONSTRAINT,
   VARIANT_SKU_UNIQUE_CONSTRAINT,
   type StockableVariant,
+  type StockableVariantListing,
 } from './infrastructure/catalogRepository.js';
 
 /**
@@ -54,6 +56,18 @@ export interface CatalogService {
    * or a `409` is the calling workflow's rule, not the catalog's.
    */
   findStockableVariant(variantId: string): Promise<StockableVariant | null>;
+  /**
+   * Every variant that may currently be stocked — active variants of active
+   * products — with the product name, SKU, and attributes needed to label one.
+   *
+   * The plural counterpart to `findStockableVariant`, and it exists for the same
+   * reason: the inventory module has to name what it holds stock of, and the
+   * catalog owns the tables that say so. Current stock is composed from this
+   * plus inventory's own locations and balances, in the inventory service —
+   * which is why this returns the catalog side complete and unfiltered by
+   * anything inventory knows, and decides nothing about stock.
+   */
+  listStockableVariants(): Promise<StockableVariantListing[]>;
 }
 
 /** A SKU collision is astronomically unlikely; a few retries is ample and bounded. */
@@ -143,6 +157,7 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
     createProduct,
     listProducts,
     findStockableVariant: (variantId) => findStockableVariant(pool, variantId),
+    listStockableVariants: () => listStockableVariants(pool),
   };
 }
 

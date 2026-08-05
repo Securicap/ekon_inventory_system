@@ -15,4 +15,5 @@ export * from './errors.js';
 export * from './http.js';
 export * from './catalog.js';
 export * from './inventoryLocations.js';
+export * from './inventoryBalances.js';
 export * from './receiving.js';

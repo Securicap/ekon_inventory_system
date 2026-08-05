@@ -8,9 +8,12 @@ information remotely from another country.
 module can create and list stockable products with server-generated SKUs
 ([backend/src/modules/catalog](backend/src/modules/catalog/README.md)), and the
 `inventory` module lists inventory locations, holds the append-only movement
-ledger, and now **records stock arriving**: `POST /api/inventory/receive` books
-in one variant at one location, through the posting engine, with retries that
-apply once
+ledger, **records stock arriving** — `POST /api/inventory/receive` books in one
+variant at one location, through the posting engine, with retries that apply
+once — and now **answers what is on the shelf**: `GET /api/inventory/balances`
+returns every active variant and its quantity at every active location, read
+from the balance projection, including the variants nobody has booked anything
+in against yet
 ([backend/src/modules/inventory](backend/src/modules/inventory/README.md)). The
 `identity` module holds the users, sessions, and role-capability schema, the
 first-owner bootstrap command, and now **session authentication** — sign in,
@@ -29,8 +32,8 @@ locations, **book in a delivery** — one item, one location, one quantity, one
 arrival time — and sign out ([frontend](frontend/README.md)). A retry after a
 dropped connection books the stock once, because the browser sends the same
 operation id rather than a new one. The screens are a temporary shell, not the
-platform's visual design — no dashboard, no design system. Production deployment
-is reviewed next.
+platform's visual design — no dashboard, no design system. The screen that shows
+current stock is the next piece of frontend work; the API it reads exists now.
 
 ---
 
