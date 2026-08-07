@@ -26,14 +26,19 @@ application that omits a declaration refuses to start, and the catalog and
 inventory routes are enforced — `401` without a session, `403` without the
 capability.
 
-The application is now **usable from a browser**, and the first inventory
-workflow works end to end: sign in, read the catalog and the inventory
-locations, **book in a delivery** — one item, one location, one quantity, one
-arrival time — and sign out ([frontend](frontend/README.md)). A retry after a
-dropped connection books the stock once, because the browser sends the same
-operation id rather than a new one. The screens are a temporary shell, not the
-platform's visual design — no dashboard, no design system. The screen that shows
-current stock is the next piece of frontend work; the API it reads exists now.
+The application is now **usable from a browser**, and the first inventory loop
+is closed: sign in, read the catalog, **book in a delivery** — one item, one
+location, one quantity, one arrival time — **read what is on the shelf**, and
+sign out ([frontend](frontend/README.md)). A retry after a dropped connection
+books the stock once, because the browser sends the same operation id rather
+than a new one. The Stock screen reads `GET /api/inventory/balances` behind
+`inventory.read` and shows every active variant with its total and its quantity
+at each active location, zeroes included; a confirmed receipt marks that read
+stale so the next look at it asks the server again. It searches in the browser
+over what the server already sent, refreshes only when somebody presses the
+button — there is no polling — and shows no movement history. The screens are a
+temporary shell, not the platform's visual design — no dashboard, no design
+system. Stock removal, adjustments, and counts are the workflows that follow.
 
 ---
 

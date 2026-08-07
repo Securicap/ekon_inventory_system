@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   MAX_MOVEMENT_QUANTITY,
@@ -13,6 +13,7 @@ import { ErrorNotice } from '../components/ErrorNotice.js';
 import { PRIMARY_BUTTON, SECONDARY_BUTTON, TEXT_INPUT } from '../components/styles.js';
 import { useTranslator } from '../i18n/index.js';
 import { api, ApiError, NetworkError } from '../lib/api.js';
+import { inventoryBalancesQueryKey } from '../lib/inventoryQueries.js';
 import { newOperationId } from '../lib/operations.js';
 import {
   activeLocations,
@@ -67,6 +68,7 @@ interface SentReceipt {
 export function ReceivingScreen() {
   const t = useTranslator();
   const { reportSessionEnded } = useAuth();
+  const queryClient = useQueryClient();
 
   const products = useProtectedQuery({
     queryKey: ['catalog', 'products'],
@@ -118,6 +120,25 @@ export function ReceivingScreen() {
     onSuccess: (response) => {
       setResult(response);
       setPhase('succeeded');
+
+      /**
+       * The stock the shop is holding just changed, and the current-stock
+       * screen is the one read model that now says something out of date.
+       *
+       * Last, and deliberately after the confirmation state is set. The
+       * movement is already permanent — the server answered `201` — so nothing
+       * about tidying a cache may be allowed to turn a booked delivery into an
+       * ambiguous "did that work?". A replay of an earlier receipt answers
+       * `201` too and invalidates identically, which costs one read and keeps
+       * the two paths the same.
+       *
+       * Fire and forget, with the rejection swallowed for the same reason: the
+       * promise resolves when the refetches it triggered settle, and a refetch
+       * that fails is the stock screen's problem to render, not this screen's
+       * to report. The catalog and the location list are untouched — receiving
+       * created no product and opened no counter.
+       */
+      void queryClient.invalidateQueries({ queryKey: inventoryBalancesQueryKey }).catch(() => {});
     },
     onError: (error) => {
       // A mutation is a protected request like any other, and a 401 back from

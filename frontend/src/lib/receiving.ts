@@ -5,6 +5,7 @@ import {
   type ListProductsResponse,
 } from '@ekon/shared';
 import type { MessageKey } from '../i18n/index.js';
+import { formatVariantAttributes } from './variants.js';
 
 /**
  * The parts of receiving that are decisions rather than markup: which items may
@@ -61,18 +62,18 @@ export function activeVariantChoices(products: ListProductsResponse): VariantCho
  * id, the variant id, and the timestamps are not: they identify rows to a
  * database and mean nothing to the person receiving a delivery.
  *
- * Attribute names and values are the shop's own words, entered when the product
- * was created, so they are shown as they were typed and are not translated.
+ * The attributes are formatted by `lib/variants.ts`, which the stock screen
+ * uses too — it needs them on their own line rather than inside one label, and
+ * the two screens must not describe the same variant differently.
  */
 export function formatVariantLabel(
   productName: string,
   attributes: ReadonlyArray<{ name: string; value: string }>,
   sku: string,
 ): string {
-  const described = attributes
-    .map((attribute) => `${attribute.name}: ${attribute.value}`)
-    .join(', ');
-  return [productName, described, sku].filter((part) => part !== '').join(' — ');
+  return [productName, formatVariantAttributes(attributes), sku]
+    .filter((part) => part !== '')
+    .join(' — ');
 }
 
 /** Locations that may take stock. An inactive location is not a choice. */

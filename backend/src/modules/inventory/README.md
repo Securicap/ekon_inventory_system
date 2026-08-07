@@ -579,10 +579,12 @@ Adjustments, physical counts, and public reversal. Reversal posting itself.
 Transfers, multi-location stock behaviour, and location management (create /
 rename / deactivate). Offline sync remains deferred too.
 
-The **receiving screen** now exists and calls `POST /api/inventory/receive` —
-see [frontend/README.md](../../../../frontend/README.md). The **stock screen**
-that reads `GET /api/inventory/balances` is the next PR; this one is backend and
-shared-contract work only.
+The **receiving screen** calls `POST /api/inventory/receive`, and the **stock
+screen** now reads `GET /api/inventory/balances` — see
+[frontend/README.md](../../../../frontend/README.md). It renders the response as
+it arrives, zeroes and never-stocked shelves included, searches it in the
+browser, and re-reads it when somebody presses refresh or a receipt succeeds. It
+adds no query parameter, because there are none.
 
 Deferred with the stock read specifically: movement history and any history
 endpoint, low-stock thresholds, reserved stock and available-to-promise, costs

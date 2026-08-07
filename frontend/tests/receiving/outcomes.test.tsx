@@ -72,8 +72,9 @@ describe('a receipt the server accepted', () => {
   });
 
   it('does not refetch the catalog or the locations it did not change', async () => {
-    // Receiving moves stock. It does not create products or open counters, and
-    // there is no balance screen yet whose numbers would now be stale.
+    // Receiving moves stock. It does not create products or open counters. The
+    // one read it does make stale is the current-stock balance, and that is
+    // invalidated rather than refetched here — see `invalidation.test.tsx`.
     const api = await openReceiving({ [RECEIVE_ROUTE]: json(receiptResponse(), 201) });
 
     fillValidReceipt();
