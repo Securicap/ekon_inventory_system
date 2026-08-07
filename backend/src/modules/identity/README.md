@@ -43,20 +43,29 @@ without touching business logic. The mapping lives in `role_capabilities`,
 seeded by migration 0007 to match `DEFAULT_ROLE_CAPABILITIES` in `@ekon/shared`;
 a test fails if the two ever disagree.
 
-| Role          | Capabilities                                          |
-| ------------- | ----------------------------------------------------- |
-| `SUPER_ADMIN` | all                                                   |
-| `OWNER`       | all                                                   |
-| `MANAGER`     | all except `identity.manage`                          |
-| `EMPLOYEE`    | `catalog.read`, `inventory.read`, `inventory.receive` |
+| Role          | Capabilities                                                              |
+| ------------- | ------------------------------------------------------------------------- |
+| `SUPER_ADMIN` | all                                                                       |
+| `OWNER`       | all                                                                       |
+| `MANAGER`     | all except `identity.manage`                                              |
+| `EMPLOYEE`    | `catalog.read`, `inventory.read`, `inventory.receive`, `inventory.remove` |
 
-An employee reads the catalog, reads stock, and books in what arrives. Writing
-the catalog, adjusting or counting stock, reversing a movement, reading the
-audit log, and exporting reports are withheld: each either changes what the
-numbers mean or can hide the fact that they changed. Granting one of them later
-is a deliberate act. Starting permissive and tightening afterwards is the wrong
-direction — by then people are used to the access, and taking it back reads as
-an accusation.
+An employee reads the catalog, reads stock, books in what arrives, and records
+what leaves. That last one is `inventory.remove`, granted by migration 0008:
+selling a bottle, discarding a broken one, and taking one for the shop's own use
+are what somebody at the counter does all day, and an operating model that made
+them fetch a manager to record a sale would be one nobody used — the stock would
+leave the shelf anyway and the ledger would be the only thing that did not know.
+
+**`inventory.remove` is not `inventory.adjust`, and an employee holds only the
+first.** Removing stock says what happened; adjusting it says the record was
+wrong. The second can make a shortfall disappear, so it is the one that has to
+be given on purpose. Writing the catalog, adjusting or counting stock, reversing
+a movement, reading the audit log, and exporting reports are all withheld for
+the same kind of reason: each either changes what the numbers mean or can hide
+the fact that they changed. Granting one of them later is a deliberate act.
+Starting permissive and tightening afterwards is the wrong direction — by then
+people are used to the access, and taking it back reads as an accusation.
 
 Roles are a closed set and are not configurable at runtime, and there are no
 per-user capability overrides. Changing what a role may do is a migration:

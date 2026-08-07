@@ -63,11 +63,34 @@ describe('quantity contract', () => {
 });
 
 describe('movement contract', () => {
-  it('requires a reason for adjustments and only for adjustments', () => {
-    expect([...REASON_REQUIRED_MOVEMENT_TYPES].sort()).toEqual(['ADJUSTMENT_IN', 'ADJUSTMENT_OUT']);
+  it('requires a reason for issues and adjustments, and for nothing else', () => {
+    // A receipt carries its reason in its type, a count in the count, and a
+    // reversal in the movement it reverses. The other three cannot say what
+    // happened without one.
+    expect([...REASON_REQUIRED_MOVEMENT_TYPES].sort()).toEqual([
+      'ADJUSTMENT_IN',
+      'ADJUSTMENT_OUT',
+      'ISSUE',
+    ]);
     for (const type of REASON_REQUIRED_MOVEMENT_TYPES) {
       expect(MOVEMENT_TYPES).toContain(type);
     }
+  });
+
+  it('tells stock that left from stock that was mis-recorded', () => {
+    // The distinction is permanent: this ledger is append-only, so a movement
+    // written under the wrong one of these is wrong forever. Collapsing them
+    // into one type would make trade and recording error the same fact.
+    expect(MOVEMENT_TYPES).toContain('ISSUE');
+    expect(MOVEMENT_TYPES).toContain('ADJUSTMENT_OUT');
+  });
+
+  it('names no business domain the system does not have', () => {
+    // `ISSUE` and not `SALE`, `ORDER`, `SHIPMENT`, or `RETURN`. Stock leaving
+    // is the ledger's fact; whether it was sold is a *reason*, and a column
+    // that named a sales domain would be a claim about a module nobody has
+    // designed.
+    expect(MOVEMENT_TYPES.some((t) => /SALE|ORDER|SHIPMENT|RETURN|INVOICE/i.test(t))).toBe(false);
   });
 
   it('has no movement type that overwrites a quantity', () => {

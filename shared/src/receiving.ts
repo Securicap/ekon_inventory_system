@@ -2,9 +2,10 @@ import { z } from 'zod';
 import {
   MAX_MOVEMENT_QUANTITY,
   idSchema,
+  movementResultSchema,
   occurredAtSchema,
   operationIdSchema,
-  quantitySchema,
+  type MovementResult,
 } from './movements.js';
 
 /**
@@ -71,28 +72,18 @@ export const receiveStockRequestSchema = z
 export type ReceiveStockRequest = z.infer<typeof receiveStockRequestSchema>;
 
 /**
- * The result of receiving: what the command was, what it produced, and what the
- * shelf holds now.
+ * The result of receiving: which command this answers, the movement it
+ * produced, and what the shelf holds now.
  *
- * Deliberately three fields. The ledger's internals — the predecessor movement,
- * the quantity the shelf held before, the request hash, the operation row's
- * state — are how the server keeps its own promises and are of no use to a
- * screen that has just booked in a delivery. `quantityAfter` carries the
- * posting engine's own name for the resulting balance rather than a second name
- * for one number.
+ * The shared `movementResultSchema`, under the name receiving's callers already
+ * use. It is the same three fields removal answers with, and they are the same
+ * three for the same reason — so they are written once. `quantityAfter` carries
+ * the posting engine's own name for the resulting balance rather than a second
+ * name for one number.
  *
  * A retry of the same command returns this same body, with the same
  * `movementId`: replaying is answered, not re-posted.
  */
-export const receiveStockResponseSchema = z
-  .object({
-    /** Echoed back so a client can match a response to the command it retried. */
-    operationId: idSchema,
-    /** The movement this command produced. Server-generated, and permanent. */
-    movementId: idSchema,
-    /** Quantity on hand for that (variant, location) after the movement. */
-    quantityAfter: quantitySchema,
-  })
-  .strict();
+export const receiveStockResponseSchema = movementResultSchema;
 
-export type ReceiveStockResponse = z.infer<typeof receiveStockResponseSchema>;
+export type ReceiveStockResponse = MovementResult;

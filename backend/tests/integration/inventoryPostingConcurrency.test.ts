@@ -6,9 +6,16 @@ import {
   type PostMovementCommand,
 } from '../../src/modules/inventory/index.js';
 import { fixedClock } from '../../src/platform/clock/index.js';
-import type { DatabaseClient } from '../../src/platform/db/pool.js';
 import { AppError } from '../../src/platform/http/errors.js';
 import { newId } from '../../src/platform/ids/uuidv7.js';
+import {
+  fulfilled,
+  holdPendingBalanceInsert,
+  lockBalanceRow,
+  rejections,
+  runConcurrentlyBehindLock,
+  waitForBlockedBackends,
+} from '../helpers/ledgerConcurrency.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
 
 /**
@@ -22,20 +29,18 @@ import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
  *
  * `Promise.all` alone would not prove anything: the calls might simply run one
  * after another and pass for the wrong reason. So every scenario forces genuine
- * overlap. A separate transaction takes the contended lock first, the commands
- * are launched, and the test waits until PostgreSQL itself reports that all of
- * them are blocked on a lock — read from `pg_stat_activity`, not guessed at
- * with a sleep — before releasing. If the overlap does not happen, the barrier
- * times out and the test fails rather than passing quietly.
+ * overlap, through the barrier in `tests/helpers/ledgerConcurrency.ts`: a
+ * separate transaction takes the contended lock first, the commands are
+ * launched, and the test waits until PostgreSQL itself reports that all of them
+ * are blocked on a lock — read from `pg_stat_activity`, not guessed at with a
+ * sleep — before releasing. If the overlap does not happen, the barrier times
+ * out and the test fails rather than passing quietly. The removal suite stages
+ * the same contention over HTTP with the same helper.
  */
 
 const OCCURRED_AT = new Date('2026-08-04T10:00:00.000Z');
 /** What the injected clock reads. Fixture rows reuse it; nothing depends on it. */
 const RECORDED_AT = new Date('2026-08-04T12:00:00.000Z');
-
-/** Bounded safety guard on the barrier. Reached only when overlap never happens. */
-const BLOCKED_TIMEOUT_MS = 10_000;
-const POLL_INTERVAL_MS = 10;
 
 let db: TestDatabase;
 let ledger: LedgerService;
@@ -67,8 +72,6 @@ interface Chain {
   variantId: string;
   locationId: string;
 }
-
-const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 let skuCounter = 0;
 function nextSku(): string {
@@ -116,102 +119,6 @@ function command(chain: Chain, overrides: Partial<PostMovementCommand> = {}): Po
     ...overrides,
   };
 }
-
-// --- Overlap coordination ---------------------------------------------------
-
-/**
- * Waits until PostgreSQL reports `expected` backends blocked on a lock in this
- * test database. This is the barrier: it is the database confirming that the
- * commands really are contending, rather than the test hoping they are.
- */
-async function waitForBlockedBackends(watcher: DatabaseClient, expected: number): Promise<void> {
-  const deadline = Date.now() + BLOCKED_TIMEOUT_MS;
-  let seen = 0;
-
-  for (;;) {
-    const { rows } = await watcher.query<{ count: string }>(
-      `SELECT count(*)::text AS count
-         FROM pg_stat_activity
-        WHERE datname = current_database()
-          AND pid <> pg_backend_pid()
-          AND wait_event_type = 'Lock'`,
-    );
-    seen = Number(rows[0]!.count);
-    if (seen >= expected) return;
-    if (Date.now() >= deadline) {
-      throw new Error(
-        `Timed out waiting for ${expected} transactions to block on a lock; saw ${seen}. ` +
-          'The commands did not overlap, so this scenario proved nothing.',
-      );
-    }
-    await delay(POLL_INTERVAL_MS);
-  }
-}
-
-/**
- * Runs `posts` concurrently with guaranteed overlap.
- *
- * `takeBlock` runs first, in its own transaction, and takes whatever lock the
- * posts will contend for. Every post is then launched, the barrier waits until
- * all of them are blocked, and only then is the blocking transaction rolled
- * back — releasing them into a genuine race.
- */
-async function postConcurrently<T>(
-  takeBlock: (holder: DatabaseClient) => Promise<void>,
-  posts: Array<() => Promise<T>>,
-): Promise<PromiseSettledResult<T>[]> {
-  const watcher = await db.pool.connect();
-  const holder = await db.pool.connect();
-
-  try {
-    await holder.query('BEGIN');
-    await takeBlock(holder);
-
-    const running = posts.map((post) => post());
-    // Keep an early rejection from surfacing as an unhandled rejection while
-    // the barrier is still waiting; `running` itself is still settled below.
-    for (const promise of running) promise.catch(() => undefined);
-
-    await waitForBlockedBackends(watcher, posts.length);
-    await holder.query('ROLLBACK');
-
-    return await Promise.allSettled(running);
-  } finally {
-    await holder.query('ROLLBACK').catch(() => undefined);
-    holder.release();
-    watcher.release();
-  }
-}
-
-/** Locks an existing balance row, so posts to that chain queue behind it. */
-const lockBalanceRow =
-  (chain: Chain) =>
-  async (holder: DatabaseClient): Promise<void> => {
-    const { rowCount } = await holder.query(
-      `SELECT 1 FROM inventory_balances
-        WHERE variant_id = $1 AND location_id = $2
-        FOR UPDATE`,
-      [chain.variantId, chain.locationId],
-    );
-    // The barrier is worthless if there was no row to lock.
-    expect(rowCount).toBe(1);
-  };
-
-/**
- * Inserts the balance row for a chain that has none and holds it uncommitted,
- * so posts block on the lazy-creation insert instead of on a row lock. Rolled
- * back with the holder, leaving the real first writer to create it.
- */
-const holdPendingBalanceInsert =
-  (chain: Chain) =>
-  async (holder: DatabaseClient): Promise<void> => {
-    await holder.query(
-      `INSERT INTO inventory_balances
-         (variant_id, location_id, quantity_on_hand, last_movement_id, updated_at)
-       VALUES ($1, $2, 0, NULL, $3)`,
-      [chain.variantId, chain.locationId, RECORDED_AT],
-    );
-  };
 
 // --- Reading persisted state ------------------------------------------------
 
@@ -331,14 +238,6 @@ async function auditChain(chain: Chain): Promise<{ ordered: MovementRow[]; sumDe
   return { ordered, sumDelta: running };
 }
 
-function fulfilled<T>(results: PromiseSettledResult<T>[]): T[] {
-  return results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
-}
-
-function rejections<T>(results: PromiseSettledResult<T>[]): unknown[] {
-  return results.filter((r) => r.status === 'rejected').map((r) => r.reason);
-}
-
 beforeAll(async () => {
   db = await createTestDatabase();
   ledger = createLedgerService({
@@ -358,7 +257,8 @@ describe('concurrent movements on one chain', () => {
     const opening = await ledger.postMovement(command(chain, { quantityDelta: 10 }));
 
     const deltas = [3, 4, 5, 6];
-    const results = await postConcurrently(
+    const results = await runConcurrentlyBehindLock(
+      db.pool,
       lockBalanceRow(chain),
       deltas.map((quantityDelta) => () => ledger.postMovement(command(chain, { quantityDelta }))),
     );
@@ -386,9 +286,10 @@ describe('concurrent first movements onto an empty chain', () => {
     expect(await readBalance(chain)).toBeUndefined();
 
     const deltas = [2, 3, 4];
-    const results = await postConcurrently(
+    const results = await runConcurrentlyBehindLock(
+      db.pool,
       // Nothing to lock yet: the writers contend on the lazy balance insert.
-      holdPendingBalanceInsert(chain),
+      holdPendingBalanceInsert(chain, RECORDED_AT),
       deltas.map((quantityDelta) => () => ledger.postMovement(command(chain, { quantityDelta }))),
     );
 
@@ -420,7 +321,7 @@ describe('concurrent withdrawals that cannot both fit', () => {
     });
 
     const { result: results, ids } = await idsGeneratedBy(() =>
-      postConcurrently(lockBalanceRow(chain), [
+      runConcurrentlyBehindLock(db.pool, lockBalanceRow(chain), [
         () => ledger.postMovement(first),
         () => ledger.postMovement(second),
       ]),
@@ -469,7 +370,8 @@ describe('concurrent identical retries', () => {
     // that retried while its first request was still in flight.
     const retried = command(chain, { quantityDelta: 6 });
     const { result: results, ids } = await idsGeneratedBy(() =>
-      postConcurrently(
+      runConcurrentlyBehindLock(
+        db.pool,
         lockBalanceRow(chain),
         Array.from({ length: 4 }, () => () => ledger.postMovement({ ...retried })),
       ),
@@ -526,7 +428,7 @@ describe('concurrent reuse of one operation id for different requests', () => {
     const second = command(chain, { operationId, quantityDelta: 9, requestHash: 'c'.repeat(64) });
 
     const { result: results, ids } = await idsGeneratedBy(() =>
-      postConcurrently(lockBalanceRow(chain), [
+      runConcurrentlyBehindLock(db.pool, lockBalanceRow(chain), [
         () => ledger.postMovement(first),
         () => ledger.postMovement(second),
       ]),

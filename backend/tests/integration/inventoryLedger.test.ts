@@ -224,9 +224,7 @@ describe('movement vocabulary', () => {
   });
 
   it('requires a reason for exactly REASON_REQUIRED_MOVEMENT_TYPES', async () => {
-    const inDatabase = await checkConstraintLiterals(
-      'inventory_movements_adjustment_requires_reason',
-    );
+    const inDatabase = await checkConstraintLiterals('inventory_movements_reason_required');
     expect([...inDatabase].sort()).toEqual([...REASON_REQUIRED_MOVEMENT_TYPES].sort());
   });
 
@@ -293,7 +291,27 @@ describe('reason codes and notes', () => {
       postMovement(chain, { movementType: 'ADJUSTMENT_IN', reasonCode: null }),
     ).rejects.toMatchObject({
       code: CHECK_VIOLATION,
-      constraint: 'inventory_movements_adjustment_requires_reason',
+      constraint: 'inventory_movements_reason_required',
+    });
+  });
+
+  it('rejects an issue with no reason code', async () => {
+    // An issue says stock left; the reason says whether that was trade or
+    // loss, and 0008 put it under the same constraint as an adjustment.
+    const chain = await newChain();
+    const opening = await postMovement(chain, { quantityDelta: 5 });
+    await expect(
+      postMovement(chain, {
+        movementType: 'ISSUE',
+        quantityDelta: -1,
+        quantityBefore: 5,
+        quantityAfter: 4,
+        previousMovementId: opening,
+        reasonCode: null,
+      }),
+    ).rejects.toMatchObject({
+      code: CHECK_VIOLATION,
+      constraint: 'inventory_movements_reason_required',
     });
   });
 

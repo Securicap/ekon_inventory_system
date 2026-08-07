@@ -10,11 +10,18 @@ module can create and list stockable products with server-generated SKUs
 `inventory` module lists inventory locations, holds the append-only movement
 ledger, **records stock arriving** — `POST /api/inventory/receive` books in one
 variant at one location, through the posting engine, with retries that apply
-once — and now **answers what is on the shelf**: `GET /api/inventory/balances`
-returns every active variant and its quantity at every active location, read
-from the balance projection, including the variants nobody has booked anything
-in against yet
-([backend/src/modules/inventory](backend/src/modules/inventory/README.md)). The
+once — **answers what is on the shelf**: `GET /api/inventory/balances` returns
+every active variant and its quantity at every active location, read from the
+balance projection, including the variants nobody has booked anything in against
+yet — and now **records stock leaving**: `POST /api/inventory/remove` posts an
+`ISSUE` for a positive quantity that was sold, damaged, or used internally,
+under the new `inventory.remove` capability, refused with `INSUFFICIENT_STOCK`
+rather than clamped when the shelf cannot cover it
+([backend/src/modules/inventory](backend/src/modules/inventory/README.md)).
+**Stock leaving is not stock being corrected:** `ISSUE` says the stock genuinely
+went, `ADJUSTMENT_OUT` says the recorded balance was wrong, and the adjustment
+workflow is not implemented. `SOLD` is a removal reason and nothing more — there
+is no sale, customer, price, or payment anywhere in this system. The
 `identity` module holds the users, sessions, and role-capability schema, the
 first-owner bootstrap command, and now **session authentication** — sign in,
 sign out, and `GET /api/auth/me`, behind an http-only cookie carrying an opaque
@@ -38,7 +45,8 @@ stale so the next look at it asks the server again. It searches in the browser
 over what the server already sent, refreshes only when somebody presses the
 button — there is no polling — and shows no movement history. The screens are a
 temporary shell, not the platform's visual design — no dashboard, no design
-system. Stock removal, adjustments, and counts are the workflows that follow.
+system. **Removing stock has an API but no screen yet**; that is the next piece
+of frontend work. Adjustments and counts are the workflows that follow it.
 
 ---
 
