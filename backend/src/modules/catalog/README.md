@@ -57,16 +57,29 @@ that boundary today, both as calls on `CatalogService`, and neither of them
 decides anything about stock:
 
 - `findStockableVariant(id)` — does this variant exist, and may it still be
-  stocked? Asked by receiving before it posts. One row, three columns.
+  stocked? Asked by receiving and by removal before either posts. One row, three
+  columns.
 - `listStockableVariants()` — every variant that may currently be stocked, with
   the product name, SKU, and attributes needed to label one. Asked by the
   inventory module to build the current stock view, which composes it with its
   own locations and balances.
 
-Both are filtered to the **active**, and `listStockableVariants` gates a variant
-on its parent product's `is_active` as well as its own: an active variant under a
-withdrawn product is not something the business sells. Neither returns
-`is_active` itself, because there is nothing left for the caller to decide.
+Both apply the **same** stockability rule, and it is the catalog's rule rather
+than each caller's:
+
+> A variant is stockable only when the variant **and its parent product** are
+> both active.
+
+`listStockableVariants` applies it as a filter — an active variant under a
+withdrawn product is not something the business sells, so it is not listed, and
+it returns no `is_active` at all. `findStockableVariant` cannot filter, because
+"unstockable" and "no such variant" are different answers and its callers turn
+them into different statuses; it returns the rule's result instead. **Its
+`isActive` is therefore effective stockability, not the
+`product_variants.is_active` column** — false for a retired variant and equally
+false for a live variant under a retired product. Callers are not told which,
+because no caller does anything different about it.
+
 Ordering for the list is fixed here — product name, SKU, then variant id — so
 every consumer sees the same one.
 
@@ -127,7 +140,8 @@ the request body.
 ## Not yet
 
 Deactivation (products/variants carry `is_active` but nothing sets it to false
-yet — the reads above already honour it, so the workflow that lands it changes
-nothing here), product/variant updates, deletion, pagination/filtering/search,
-controlled vocabularies or attribute-definition tables, barcodes/labels, and
-anything to do with inventory movements, balances, or the audit log.
+yet — both questions above already honour both flags, so the workflow that lands
+it only has to set the column), product/variant updates, deletion,
+pagination/filtering/search, controlled vocabularies or attribute-definition
+tables, barcodes/labels, and anything to do with inventory movements, balances,
+or the audit log.

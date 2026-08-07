@@ -181,9 +181,14 @@ export function createRemovalService(deps: RemovalServiceDeps): RemovalService {
   async function assertVariantIsStockable(variantId: string): Promise<void> {
     const variant = await deps.catalog.findStockableVariant(variantId);
     if (!variant) throw notFound('Product variant');
-    // Inactive is a conflict rather than a 404: the variant plainly exists, and
-    // telling somebody holding the last two bottles that it does not would send
-    // them looking for a typo instead of for whoever retired the item.
+    // `isActive` is the catalog's answer about stockability, not a column: it
+    // is false for a retired variant *and* for a live variant whose product was
+    // withdrawn. Which of the two it was is the catalog's business, and this
+    // workflow refuses the stock-out either way.
+    //
+    // Unstockable is a conflict rather than a 404: the variant plainly exists,
+    // and telling somebody holding the last two bottles that it does not would
+    // send them looking for a typo instead of for whoever retired the item.
     if (!variant.isActive) {
       throw conflict(
         'This product variant is no longer active and stock cannot be removed from it',
