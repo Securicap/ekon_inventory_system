@@ -1,11 +1,11 @@
 /**
- * How a variant's attributes are said to a person, in one place.
+ * How a variant is named to a person, in one place.
  *
- * Receiving needs them inside a single `<option>` label; the stock screen needs
- * them as their own line under the product name. Both need the same words in
- * the same order, and a shop that reads "gwosè: 5 mamit" on one screen and
- * "5 mamit (gwosè)" on the other is a shop being asked to notice that they are
- * the same item.
+ * Three screens need it and none of them may disagree. Receiving and removal
+ * put the whole thing inside a single `<option>`; the stock screen breaks it
+ * apart, with the attributes on their own line under the product name. A shop
+ * that reads "gwosè: 5 mamit" on one screen and "5 mamit (gwosè)" on the other
+ * is a shop being asked to notice that they are the same item.
  */
 
 /**
@@ -20,4 +20,27 @@ export function formatVariantAttributes(
   attributes: ReadonlyArray<{ name: string; value: string }>,
 ): string {
   return attributes.map((attribute) => `${attribute.name}: ${attribute.value}`).join(', ');
+}
+
+/**
+ * What a variant is called on screen, as one line.
+ *
+ * ```text
+ * Diri — gwosè: 5 mamit, mak: Tchako — EKN-AB12CD34
+ * Lwil — EKN-EF56GH78
+ * ```
+ *
+ * The SKU is included because it is the one thing printed on the shelf label,
+ * so somebody holding the box can match it. The variant signature, the product
+ * id, the variant id, and the timestamps are not: they identify rows to a
+ * database and mean nothing to the person at the counter.
+ */
+export function formatVariantLabel(
+  productName: string,
+  attributes: ReadonlyArray<{ name: string; value: string }>,
+  sku: string,
+): string {
+  return [productName, formatVariantAttributes(attributes), sku]
+    .filter((part) => part !== '')
+    .join(' — ');
 }

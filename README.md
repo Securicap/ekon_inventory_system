@@ -43,10 +43,22 @@ than a new one. The Stock screen reads `GET /api/inventory/balances` behind
 at each active location, zeroes included; a confirmed receipt marks that read
 stale so the next look at it asks the server again. It searches in the browser
 over what the server already sent, refreshes only when somebody presses the
-button — there is no polling — and shows no movement history. The screens are a
-temporary shell, not the platform's visual design — no dashboard, no design
-system. **Removing stock has an API but no screen yet**; that is the next piece
-of frontend work. Adjustments and counts are the workflows that follow it.
+button — there is no polling — and shows no movement history.
+
+The **Removal screen** closes the operating loop, behind `inventory.remove`,
+which every role holds including `EMPLOYEE`: choose an item, choose the shelf it
+left from, see what that shelf holds, say how many and why — sold, damaged, used
+internally, or other — and record it. It reads the same balance response Stock
+does, and shows what each shelf holds so nobody guesses; those numbers are
+advisory, and the server still refuses a removal the shelf cannot cover, which
+the screen renders as its own state rather than trying to prevent. A retry after
+a dropped connection removes the stock once. A confirmed removal refreshes the
+current-stock numbers everyone reads.
+
+The screens are a temporary shell, not the platform's visual design — no
+dashboard, no design system. **Stock adjustment is not implemented** — recording
+that stock left is not correcting a balance that was wrong — and adjustments and
+counts are the workflows that follow.
 
 ---
 

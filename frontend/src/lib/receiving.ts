@@ -5,16 +5,22 @@ import {
   type ListProductsResponse,
 } from '@ekon/shared';
 import type { MessageKey } from '../i18n/index.js';
-import { formatVariantAttributes } from './variants.js';
+import { localDateTimeToIso } from './businessTime.js';
+import { formatVariantLabel } from './variants.js';
 
 /**
  * The parts of receiving that are decisions rather than markup: which items may
- * be received, how one is named to a person, what a valid form looks like, and
- * how a local date and time becomes an instant.
+ * be received, which counter a fresh form starts on, and what a valid form
+ * looks like.
  *
  * They are here rather than in the screen because each one is a rule somebody
  * may need to check without reading JSX, and because every one of them is worth
  * testing directly. The screen is left with state and layout.
+ *
+ * Two things receiving used to own have moved out, because removal needs them
+ * and the two workflows must not describe the same variant or round the same
+ * local time differently: variant labels are `lib/variants.ts`, and business
+ * time is `lib/businessTime.ts`.
  */
 
 /** One selectable item: a variant, named the way a person would recognize it. */
@@ -49,33 +55,6 @@ export function activeVariantChoices(products: ListProductsResponse): VariantCho
     .sort((a, b) => a.label.localeCompare(b.label, 'fr'));
 }
 
-/**
- * What a variant is called on screen.
- *
- * ```text
- * Diri — gwosè: 5 mamit, mak: Tchako — EKN-AB12CD34
- * Lwil — EKN-EF56GH78
- * ```
- *
- * The SKU is included because it is the one thing printed on the shelf label,
- * so somebody holding the box can match it. The variant signature, the product
- * id, the variant id, and the timestamps are not: they identify rows to a
- * database and mean nothing to the person receiving a delivery.
- *
- * The attributes are formatted by `lib/variants.ts`, which the stock screen
- * uses too — it needs them on their own line rather than inside one label, and
- * the two screens must not describe the same variant differently.
- */
-export function formatVariantLabel(
-  productName: string,
-  attributes: ReadonlyArray<{ name: string; value: string }>,
-  sku: string,
-): string {
-  return [productName, formatVariantAttributes(attributes), sku]
-    .filter((part) => part !== '')
-    .join(' — ');
-}
-
 /** Locations that may take stock. An inactive location is not a choice. */
 export function activeLocations(locations: ListInventoryLocationsResponse): InventoryLocation[] {
   return locations.filter((location) => location.isActive);
@@ -95,45 +74,6 @@ export function preferredLocationId(locations: readonly InventoryLocation[]): st
   if (!preferred) return null;
   if (preferred.isDefault) return preferred.id;
   return locations.length === 1 ? preferred.id : null;
-}
-
-/**
- * A `Date` as `<input type="datetime-local">` wants it: `YYYY-MM-DDTHH:mm`, in
- * the browser's own time zone.
- *
- * Built from the local getters rather than from `toISOString`, which would
- * write UTC into a control the browser reads as local time — and so would show
- * somebody in Haiti a delivery arriving four hours from now.
- */
-export function toLocalDateTimeInputValue(date: Date): string {
-  const pad = (value: number): string => String(value).padStart(2, '0');
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
-  );
-}
-
-/**
- * The instant a local date and time refers to, as an ISO timestamp — or `null`
- * when the control holds something that is not one.
- *
- * `new Date('2026-08-04T14:30')` is *local* time by specification, which is
- * exactly what the control means, and `toISOString()` then states the same
- * moment in UTC. No time zone is chosen, offered, or guessed at anywhere: the
- * browser's clock is the shop's clock.
- *
- * The round trip at the end is what refuses a date that does not exist.
- * `new Date('2026-02-31T10:00')` does not fail — it rolls forward to 3 March —
- * so a typo would otherwise be sent as a real and wrong business time.
- */
-export function localDateTimeToIso(value: string): string | null {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(value)) return null;
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  if (toLocalDateTimeInputValue(date) !== value.slice(0, 16)) return null;
-
-  return date.toISOString();
 }
 
 /** What the form holds while it is being filled in. Strings, as the DOM has them. */

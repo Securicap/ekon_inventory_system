@@ -1,24 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import { newOperationId } from '../src/lib/operations.js';
 import {
   activeLocations,
   activeVariantChoices,
-  formatVariantLabel,
-  localDateTimeToIso,
   preferredLocationId,
-  toLocalDateTimeInputValue,
   validateReceivingForm,
 } from '../src/lib/receiving.js';
-import { newOperationId } from '../src/lib/operations.js';
 import { locationFixture, productFixture } from './helpers/fixtures.js';
 
 /**
  * The decisions behind the receiving form, tested away from the DOM: which
- * items may be received, what one is called, what a valid receipt looks like,
- * and how a local date and time becomes an instant.
+ * items may be received, which counter a fresh form starts on, and what a valid
+ * receipt looks like.
  *
- * The time-zone tests derive their expectations through the same `Date`
- * semantics the browser uses rather than hard-coding an offset, so they hold
- * wherever they are run.
+ * Two things receiving used to own are tested beside the modules they moved to,
+ * because removal needs them too: variant labels in `variants.test.ts`, and
+ * business time in `businessTime.test.ts`.
  */
 
 describe('which variants may be received', () => {
@@ -42,25 +39,6 @@ describe('which variants may be received', () => {
       productFixture({ id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a03', name: 'Ayil' }),
     ]);
     expect(choices.map((choice) => choice.label.split(' ')[0])).toEqual(['Ayil', 'Zoranj']);
-  });
-});
-
-describe('naming a variant', () => {
-  it('reads as product, attributes, and SKU', () => {
-    expect(
-      formatVariantLabel(
-        'Chemiz',
-        [
-          { name: 'gwosè', value: 'Gran' },
-          { name: 'koulè', value: 'Ble' },
-        ],
-        'EKN-AB12CD34',
-      ),
-    ).toBe('Chemiz — gwosè: Gran, koulè: Ble — EKN-AB12CD34');
-  });
-
-  it('leaves out an empty attribute list rather than an empty gap', () => {
-    expect(formatVariantLabel('Lwil', [], 'EKN-EF56GH78')).toBe('Lwil — EKN-EF56GH78');
   });
 });
 
@@ -93,50 +71,6 @@ describe('which location a form starts on', () => {
 
   it('chooses nothing when there is nowhere to receive', () => {
     expect(preferredLocationId([])).toBeNull();
-  });
-});
-
-describe('local time to an instant', () => {
-  it('means the local time, and states it in UTC', () => {
-    const value = '2026-08-04T14:30';
-    expect(localDateTimeToIso(value)).toBe(new Date(value).toISOString());
-  });
-
-  it('round-trips whatever the control was prefilled with', () => {
-    const now = new Date();
-    const value = toLocalDateTimeInputValue(now);
-    const iso = localDateTimeToIso(value);
-    expect(iso).not.toBeNull();
-    expect(toLocalDateTimeInputValue(new Date(iso!))).toBe(value);
-  });
-
-  it('writes the control value in local time, never in UTC', () => {
-    // The distinction only shows where the two differ, which is everywhere the
-    // shop is. Compared against the local getters rather than a fixed offset.
-    const date = new Date(2026, 7, 4, 14, 30);
-    expect(toLocalDateTimeInputValue(date)).toBe('2026-08-04T14:30');
-  });
-
-  it('pads every part, so the control accepts it', () => {
-    expect(toLocalDateTimeInputValue(new Date(2026, 0, 2, 3, 4))).toBe('2026-01-02T03:04');
-  });
-
-  it('refuses a date that does not exist', () => {
-    // `new Date('2026-02-31T10:00')` rolls forward to 3 March rather than
-    // failing, so without the round-trip check a typo would be sent as a real
-    // and wrong business time.
-    expect(localDateTimeToIso('2026-02-31T10:00')).toBeNull();
-    expect(localDateTimeToIso('2025-02-29T10:00')).toBeNull();
-  });
-
-  it('accepts a leap day in a leap year', () => {
-    expect(localDateTimeToIso('2028-02-29T10:00')).not.toBeNull();
-  });
-
-  it('refuses anything that is not a local date and time', () => {
-    for (const value of ['', 'yesterday', '2026-08-04', '04/08/2026 14:30', '2026-08-04T14']) {
-      expect(localDateTimeToIso(value), value).toBeNull();
-    }
   });
 });
 

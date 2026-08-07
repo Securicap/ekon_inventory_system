@@ -9,6 +9,7 @@ import { CatalogScreen } from '../screens/CatalogScreen.js';
 import { HomeScreen } from '../screens/HomeScreen.js';
 import { InventoryScreen } from '../screens/InventoryScreen.js';
 import { ReceivingScreen } from '../screens/ReceivingScreen.js';
+import { RemovalScreen } from '../screens/RemovalScreen.js';
 
 /**
  * The authenticated shell: who is signed in, how to leave, where to go, and one
@@ -20,7 +21,7 @@ import { ReceivingScreen } from '../screens/ReceivingScreen.js';
  * charts, and no summary tiles, because inventing numbers before the workflows
  * that produce them exist would be inventing the business's numbers.
  */
-type View = 'home' | 'catalog' | 'inventory' | 'receiving';
+type View = 'home' | 'catalog' | 'inventory' | 'receiving' | 'removal';
 
 interface NavigationItem {
   view: View;
@@ -41,18 +42,27 @@ interface NavigationItem {
  *    before. `identity.manage`, `audit.read`, and `reports.export` are still
  *    waiting for theirs.
  *
- * Receiving is gated on `inventory.receive` and on nothing else. Reading stock
- * and booking it in are different permissions — an employee may hold both, and
- * somebody may hold only the first — so `inventory.read` must not open this
- * door. The API enforces the same capability, which is the boundary that
- * matters; this only decides whether somebody is shown a door that will be shut
- * in their face.
+ * Each inventory door has its own key, and the keys are not interchangeable.
+ * Receiving is gated on `inventory.receive`, removal on `inventory.remove`, and
+ * reading stock on `inventory.read` — three different permissions over three
+ * different acts, and somebody may hold any combination of them. Neither write
+ * door opens on the read capability, and neither opens on the other's.
+ *
+ * `inventory.adjust` opens nothing here, deliberately. Recording that stock
+ * left is what somebody at the counter does all day; correcting a balance that
+ * was wrong is authority over the records themselves, and the screen for it
+ * does not exist. A capability is not a destination.
+ *
+ * The API enforces the same capabilities, which is the boundary that matters;
+ * this only decides whether somebody is shown a door that will be shut in their
+ * face.
  */
 const NAVIGATION: readonly NavigationItem[] = [
   { view: 'home', labelKey: 'nav.home' },
   { view: 'catalog', labelKey: 'nav.products', capability: 'catalog.read' },
   { view: 'inventory', labelKey: 'nav.stock', capability: 'inventory.read' },
   { view: 'receiving', labelKey: 'nav.receive', capability: 'inventory.receive' },
+  { view: 'removal', labelKey: 'nav.remove', capability: 'inventory.remove' },
 ];
 
 /**
@@ -117,6 +127,7 @@ export function AppShell() {
         {view === 'catalog' && <CatalogScreen />}
         {view === 'inventory' && <InventoryScreen />}
         {view === 'receiving' && <ReceivingScreen />}
+        {view === 'removal' && <RemovalScreen />}
       </main>
     </div>
   );
