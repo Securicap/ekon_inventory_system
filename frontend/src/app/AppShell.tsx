@@ -8,6 +8,7 @@ import { useTranslator, type MessageKey } from '../i18n/index.js';
 import { CatalogScreen } from '../screens/CatalogScreen.js';
 import { HomeScreen } from '../screens/HomeScreen.js';
 import { InventoryScreen } from '../screens/InventoryScreen.js';
+import { NewUserScreen } from '../screens/NewUserScreen.js';
 import { ReceivingScreen } from '../screens/ReceivingScreen.js';
 import { RemovalScreen } from '../screens/RemovalScreen.js';
 
@@ -21,7 +22,7 @@ import { RemovalScreen } from '../screens/RemovalScreen.js';
  * charts, and no summary tiles, because inventing numbers before the workflows
  * that produce them exist would be inventing the business's numbers.
  */
-type View = 'home' | 'catalog' | 'inventory' | 'receiving' | 'removal';
+type View = 'home' | 'catalog' | 'inventory' | 'receiving' | 'removal' | 'newUser';
 
 interface NavigationItem {
   view: View;
@@ -39,8 +40,7 @@ interface NavigationItem {
  *    `role === 'OWNER'` anywhere in this application;
  *  - a capability is not a destination. A link to a screen that does not exist
  *    is worse than a missing link, so an entry arrives with its screen and not
- *    before. `identity.manage`, `audit.read`, and `reports.export` are still
- *    waiting for theirs.
+ *    before. `audit.read` and `reports.export` are still waiting for theirs.
  *
  * Each inventory door has its own key, and the keys are not interchangeable.
  * Receiving is gated on `inventory.receive`, removal on `inventory.remove`, and
@@ -53,6 +53,12 @@ interface NavigationItem {
  * was wrong is authority over the records themselves, and the screen for it
  * does not exist. A capability is not a destination.
  *
+ * `identity.manage` opens one door and it is a narrow one: creating an account.
+ * That is the whole of user management that exists, so it is the whole of what
+ * the entry promises — it is labelled for the act rather than for the subject,
+ * because a link called "Users" that cannot list any would be a lie about what
+ * is behind it.
+ *
  * The API enforces the same capabilities, which is the boundary that matters;
  * this only decides whether somebody is shown a door that will be shut in their
  * face.
@@ -63,6 +69,7 @@ const NAVIGATION: readonly NavigationItem[] = [
   { view: 'inventory', labelKey: 'nav.stock', capability: 'inventory.read' },
   { view: 'receiving', labelKey: 'nav.receive', capability: 'inventory.receive' },
   { view: 'removal', labelKey: 'nav.remove', capability: 'inventory.remove' },
+  { view: 'newUser', labelKey: 'nav.newUser', capability: 'identity.manage' },
 ];
 
 /**
@@ -128,6 +135,7 @@ export function AppShell() {
         {view === 'inventory' && <InventoryScreen />}
         {view === 'receiving' && <ReceivingScreen />}
         {view === 'removal' && <RemovalScreen />}
+        {view === 'newUser' && <NewUserScreen />}
       </main>
     </div>
   );

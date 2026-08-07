@@ -9,6 +9,7 @@ import {
 } from './authService.js';
 import { installAccessEnforcement } from './enforcement.js';
 import { registerIdentityRoutes } from './routes.js';
+import { createIdentityUserService } from './userService.js';
 
 /**
  * The identity module's composition entry point. The application root calls
@@ -17,7 +18,7 @@ import { registerIdentityRoutes } from './routes.js';
  *
  * Three things happen here, in this order and for a reason:
  *
- *  1. the authentication service is created;
+ *  1. the module's services are created — authentication, and account creation;
  *  2. **global access enforcement is installed on the whole application** — the
  *     startup check that every `/api/` route declares its access, and the hook
  *     that resolves the session and the capability on every request;
@@ -47,8 +48,9 @@ export function registerIdentity(
   },
 ): IdentityAuthService {
   const service = createIdentityAuthService(deps);
+  const users = createIdentityUserService(deps);
   installAccessEnforcement(app, service);
-  registerIdentityRoutes(app, service, deps.config.NODE_ENV);
+  registerIdentityRoutes(app, service, users, deps.config.NODE_ENV);
   return service;
 }
 
@@ -76,6 +78,9 @@ export type {
   IdentityBootstrapService,
   InitialOwnerCreated,
 } from './bootstrapService.js';
+
+export { createIdentityUserService } from './userService.js';
+export type { IdentityUserService, UserServiceDeps } from './userService.js';
 
 export {
   assertPasswordAcceptable,

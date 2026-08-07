@@ -73,10 +73,14 @@ same way, and a screen that branched on a role name would be a second, quietly
 different answer that a change to `role_capabilities` would never reach.
 
 A capability is not a destination, either: an entry arrives with its screen and
-not before, so `identity.manage`, `audit.read`, and `reports.export` still offer
-nothing. Receiving is gated on **`inventory.receive`** alone — reading stock and
-booking it in are different permissions, and somebody holding only the first
-must not be shown a door the API will shut.
+not before, so `audit.read` and `reports.export` still offer nothing. Receiving
+is gated on **`inventory.receive`** alone — reading stock and booking it in are
+different permissions, and somebody holding only the first must not be shown a
+door the API will shut.
+
+**`identity.manage`** opens exactly one door, and a narrow one: creating an
+account. It is labelled for that act rather than for the subject, because a link
+called "Users" that cannot list any would be a lie about what is behind it.
 
 Each inventory door has its own key, and the keys are not interchangeable:
 Stock on **`inventory.read`**, Receiving on **`inventory.receive`**, Removal on
@@ -317,11 +321,53 @@ invalidates identically. Nothing else invalidates: not a `400`, `403`, `404`,
 changed. Only the server's answer proves the stock moved. **The visual design is
 still temporary**, like every other screen here.
 
+## Creating an account
+
+One form, behind **`identity.manage`**: a username, a full name, an initial
+password, and a role. It is the whole of user management in this milestone and
+is meant to stay that way — no list, no search, no editing, no role change, no
+deactivation, no password reset. Each of those is a separate authority over
+somebody's access, and none of them is what stops a shop opening for the day.
+Creating an account is.
+
+It exists as a screen rather than as a second operator command because the
+command it would have joined is deliberately incapable of this. The bootstrap
+creates one owner on an empty database and refuses everything else, precisely so
+that there is no permanent unauthenticated path into `users` — a provisioning
+command that could also create the tenth employee would be exactly that. This
+workflow requires a session and a capability, which is what makes it safe, and a
+signed-in workflow is a screen.
+
+**Roles come from the shared `ROLES` vocabulary**, not a copy, and the select
+offers all four — the server accepts the same closed set, so the list cannot
+drift into offering a choice the API refuses. `EMPLOYEE` is preselected, because
+it is what most accounts are.
+
+**The password is typed here and never seen again.** It lives in component state
+while it is typed and in the request body when it is sent, and nowhere else: not
+in a query key, not in a URL, not in storage, and not in the confirmation, which
+names the person and their username so they can be told those, and stops there.
+The field warns before submission that it cannot be shown afterwards. This is a
+shared laptop at a counter; a colleague's credential left on screen is a
+credential on a counter. `autocomplete="new-password"` keeps the browser from
+filing it under the signed-in person and offering it back at the login form.
+
+Validation is the shared schema, so the form cannot accept what the server
+refuses: the username is normalized before it is sent — `" Nadege.L "` is sent
+as `nadege.l` — and the password is length-checked and never trimmed.
+
+**A `409` is the one failure this screen phrases itself**, as "that username is
+taken", because the remedy is to change one field. Everything else goes to the
+shared `ErrorNotice`, which already says the right thing about `403`, a dropped
+connection, and the unexpected. No operation id is sent: creating an account is
+not a ledger command, and a repeat is a duplicate username the server refuses on
+its own.
+
 ## Routing
 
 There is none, deliberately. One authentication boundary, and inside it a shell
-that swaps its main panel between five temporary screens — home, products,
-stock, receiving, and removal. A router would buy
+that swaps its main panel between six temporary screens — home, products,
+stock, receiving, removal, and creating an account. A router would buy
 addressable URLs for screens that are about to be replaced, and would have to be
 replaced with them. A hard refresh still works: the backend's single-page
 fallback serves `index.html` for any non-`/api/` path.
@@ -363,7 +409,10 @@ to invalidate would be a dependency pointing the wrong way.
 - physical counts and reversal;
 - **any sales domain.** `SOLD` is a removal reason. There is no sale, order,
   customer, price, payment, tax, receipt, or refund, and none is planned here;
-- no user management, no password change, and no password reset;
+- **user management beyond creating an account.** The one screen creates a
+  person and stops: no list, no search, no editing, no role change, no
+  deactivation, no password change, and no password reset. Each is a separate
+  authority over somebody's access, and none of them blocks running the shop;
 - no audit log, no reports, no notifications;
 - offline operation. Connectivity failures are visible and a retry is safe, but
   nothing is queued and nothing survives a closed tab. The draft helpers in

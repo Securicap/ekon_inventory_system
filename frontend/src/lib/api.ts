@@ -108,13 +108,15 @@ export const api = {
     request<T>('POST', path, { body, operationId }),
 
   /**
-   * A POST that is deliberately not a ledger command: signing in and signing
-   * out, and nothing else.
+   * A POST that is deliberately not a ledger command: signing in, signing out,
+   * and creating a user account.
    *
    * An operation id exists so a retried *movement* is posted once. Signing in
    * is not a movement — replaying it must mint a new session rather than return
-   * the earlier one — and the backend's auth routes write no `operations` row,
-   * so sending the header would claim an idempotency that does not exist.
+   * the earlier one — and neither is creating an account, whose repeat is a
+   * duplicate username the database refuses by itself. None of those routes
+   * writes an `operations` row, so sending the header would claim an
+   * idempotency that does not exist.
    *
    * The name is long on purpose. It should be uncomfortable to reach for from a
    * business screen, where `post` is the correct call.

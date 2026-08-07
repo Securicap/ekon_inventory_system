@@ -77,8 +77,10 @@ Open <http://localhost:5173>. You will be asked to sign in. A new database has
 no accounts at all — create the first owner once, with
 `npm run identity:create-owner` (see
 [backend/src/modules/identity](backend/src/modules/identity/README.md)), then
-sign in with it. The landing screen shows a connected database and the schema
-version.
+sign in with it. Every account after that one is created from inside the
+application, by somebody holding `identity.manage`: the owner opens **Nouvo
+kont** and gives each employee a username, a name, a password, and a role. The
+landing screen shows a connected database and the schema version.
 
 `make help` lists every command.
 

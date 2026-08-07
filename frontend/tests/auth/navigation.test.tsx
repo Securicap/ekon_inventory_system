@@ -133,13 +133,16 @@ describe('capability-aware navigation', () => {
     expect(screen.queryByRole('button', { name: ht['nav.adjust'] })).toBeNull();
   });
 
-  it('offers no user management, audit, or reports for the capabilities that allow them', async () => {
+  it('offers account creation, but no audit or reports, for the capabilities that allow them', async () => {
+    // `identity.manage` now has a screen — one form that creates an account —
+    // so it appears. `audit.read` and `reports.export` still do not: a
+    // capability is not a destination, and a link to a screen that does not
+    // exist is worse than a missing link.
     await signedInAs({
       capabilities: ['identity.manage', 'audit.read', 'reports.export'],
     });
 
-    expect(navigation()).toEqual([ht['nav.home']]);
-    expect(screen.queryByText(ht['nav.users'])).toBeNull();
+    expect(navigation()).toEqual([ht['nav.home'], ht['nav.newUser']]);
     expect(screen.queryByText(ht['nav.audit'])).toBeNull();
   });
 

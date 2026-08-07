@@ -67,6 +67,38 @@ describe('capability model', () => {
     expect(DEFAULT_ROLE_CAPABILITIES.SUPER_ADMIN).toContain('identity.manage');
   });
 
+  it('lets no role be created that outranks the people who may create it', () => {
+    /**
+     * `POST /api/identity/users` accepts the whole closed role set rather than
+     * a narrower list of its own, and this is the reason it is safe to: every
+     * role that holds `identity.manage` already holds *every* capability, so
+     * there is no account a creator could make that can do something they
+     * cannot. Account creation is therefore not a privilege-escalation path,
+     * and the route needs no rule about which roles may create which.
+     *
+     * If a future migration grants `identity.manage` to a role that does not
+     * hold everything — a `MANAGER`, say — this fails, and it should: at that
+     * moment the route does need such a rule, and this is where the decision
+     * has to be made rather than discovered.
+     */
+    const creators = ROLES.filter((role) =>
+      (DEFAULT_ROLE_CAPABILITIES[role] ?? []).includes('identity.manage'),
+    );
+    expect(creators.length).toBeGreaterThan(0);
+
+    for (const creator of creators) {
+      const held = new Set(DEFAULT_ROLE_CAPABILITIES[creator] ?? []);
+      for (const created of ROLES) {
+        for (const capability of DEFAULT_ROLE_CAPABILITIES[created] ?? []) {
+          expect(
+            held.has(capability),
+            `${creator} may create a ${created}, who would hold ${capability} that ${creator} does not`,
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
   it('has no capability that permits negative stock', () => {
     // Stock below zero is forbidden by database constraint on every path.
     // A shelf cannot hold minus three items; the remedy for a shortfall is to

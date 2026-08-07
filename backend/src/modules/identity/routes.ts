@@ -1,5 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { loginRequestSchema, type AuthenticatedUserResponse } from '@ekon/shared';
+import {
+  createUserRequestSchema,
+  loginRequestSchema,
+  type AuthenticatedUserResponse,
+  type CreateUserResponse,
+} from '@ekon/shared';
 import type { Config } from '../../config/index.js';
 import type { IdentityAuthService } from './authService.js';
 import { requireActor } from './routeAccess.js';
@@ -8,24 +13,30 @@ import {
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
 } from './sessionCookie.js';
+import type { IdentityUserService } from './userService.js';
 
 /**
- * The authentication HTTP surface: sign in, sign out, and ask who you are.
+ * The identity HTTP surface: sign in, sign out, ask who you are, and create an
+ * account for somebody else.
  *
  * Login and logout are public — they are how a session is obtained and given
  * up, so requiring one would be circular. `/me` is authenticated-only: it needs
  * a valid session and no particular capability, and the enforcement hook has
- * already resolved the actor by the time its handler runs.
+ * already resolved the actor by the time its handler runs. Creating a user is
+ * the only one that requires a capability, and it requires the module's own:
+ * `identity.manage`.
  *
- * None of the three carries an operation id. The header exists so that a
- * retried movement is posted once, and signing in is not a ledger command:
- * replaying it should mint a *new* session, not return the earlier one, and
- * writing an `operations` row for it would make the login path idempotent in
- * exactly the way it must not be.
+ * None of the four carries an operation id. The header exists so that a retried
+ * movement is posted once. Signing in is not a ledger command — replaying it
+ * should mint a *new* session, not return the earlier one — and neither is
+ * creating an account: a replay of that is a duplicate username, which the
+ * database refuses on its own, and writing an `operations` row for it would
+ * claim an idempotency this workflow does not have and does not need.
  */
 export function registerIdentityRoutes(
   app: FastifyInstance,
   service: IdentityAuthService,
+  users: IdentityUserService,
   nodeEnv: Config['NODE_ENV'],
 ): void {
   /**
@@ -94,4 +105,42 @@ export function registerIdentityRoutes(
     const body: AuthenticatedUserResponse = { user: requireActor(request) };
     return reply.status(200).send(body);
   });
+
+  /**
+   * Create an account for somebody else — the workflow that lets a shop hire.
+   *
+   * Under `/api/identity/` rather than `/api/auth/`, because the three routes
+   * above are about the caller's own session and this one is not: it is the
+   * identity module acting on its `users` table, named after the module and
+   * after the capability that opens it.
+   *
+   * `identity.manage` and nothing else. The handler contains no authorization
+   * check, reads no role, and does not look at `request.actor` at all — the
+   * declaration above is the whole of it, and the enforcement hook has already
+   * turned an absent session into `401` and a session without the capability
+   * into `403` before any of this code exists to run. Which roles hold
+   * `identity.manage` is a question for `role_capabilities`, and this route is
+   * deliberately not a second place where that is decided.
+   *
+   * The body is parsed by the strict shared schema, so a request that tries to
+   * supply an id, a password hash, an active flag, a timestamp, or a capability
+   * list is a `400` naming the field rather than a value silently dropped. What
+   * survives that parse is four fields, and everything else about the account
+   * is decided by the service.
+   *
+   * `201` with the created user, and no cookie. Creating somebody's account
+   * does not sign them in and does not change who the caller is: no session row
+   * is written, and the caller's own session is untouched.
+   */
+  app.post(
+    '/api/identity/users',
+    { config: { capability: 'identity.manage' } },
+    async (request, reply) => {
+      const input = createUserRequestSchema.parse(request.body);
+      const user = await users.createUser(input);
+
+      const body: CreateUserResponse = { user };
+      return reply.status(201).send(body);
+    },
+  );
 }
