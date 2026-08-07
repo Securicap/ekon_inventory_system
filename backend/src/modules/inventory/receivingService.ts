@@ -141,8 +141,13 @@ export function createReceivingService(deps: ReceivingServiceDeps): ReceivingSer
   async function assertVariantIsStockable(variantId: string): Promise<void> {
     const variant = await deps.catalog.findStockableVariant(variantId);
     if (!variant) throw notFound('Product variant');
-    // Inactive is a conflict rather than a 404: the variant plainly exists, and
-    // telling somebody holding a delivery that it does not would send them
+    // `isActive` is the catalog's answer about stockability, not a column: it
+    // is false for a retired variant *and* for a live variant whose product was
+    // withdrawn. Which of the two it was is the catalog's business, and this
+    // workflow refuses the delivery either way.
+    //
+    // Unstockable is a conflict rather than a 404: the variant plainly exists,
+    // and telling somebody holding a delivery that it does not would send them
     // looking for a typo instead of for whoever retired the item.
     if (!variant.isActive) {
       throw conflict('This product variant is no longer active and cannot receive stock');

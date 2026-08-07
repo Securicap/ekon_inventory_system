@@ -47,7 +47,19 @@ export interface StockableVariant {
   id: string;
   /** The product this variant belongs to. The relationship, not a lookup. */
   productId: string;
-  /** Variants deactivate rather than delete once they carry stock history. */
+  /**
+   * **Effective stockability, not the raw `product_variants.is_active` column.**
+   *
+   * True only when the variant *and* its parent product are both active — the
+   * same rule `listStockableVariants` filters on, so what may be written and
+   * what is shown as current stock can never disagree. A caller that sees
+   * `false` knows only that stock may not move against this variant today; it
+   * is deliberately not told which of the two flags said so, because there is
+   * nothing it would do differently.
+   *
+   * Neither flag is a delete: both deactivate rather than delete once there is
+   * stock history, and the ledger keeps every past movement readable.
+   */
   isActive: boolean;
 }
 
@@ -59,8 +71,9 @@ export interface StockableVariant {
  * Wider than `StockableVariant` because the question is a different one. That
  * type answers "may I post against this?" for a single id; this one answers
  * "what is currently stockable, and what do I call each of them?" for all of
- * them at once. Neither carries `is_active`: both are already filtered to the
- * active, so a consumer has nothing left to decide.
+ * them at once. Neither carries a raw `is_active` column: this one is already
+ * filtered to the stockable, and that one reports stockability as one derived
+ * answer, so in both cases a consumer has nothing left to combine.
  *
  * Not a wire type either. It crosses a module boundary inside the backend; the
  * module that presents it owns the mapping to whatever crosses the network.
@@ -248,15 +261,30 @@ export async function getProductById(db: Queryable, id: string): Promise<Product
  * "may I receive against this?" has no use for the product's other variants,
  * their SKUs, or anybody's attributes, and loading them would make an inventory
  * write pay for a catalog read it never looks at. One row, three columns.
+ *
+ * **The parent product's `is_active` gates the variant here, exactly as it does
+ * in `listStockableVariants`.** An active variant under a withdrawn product is
+ * not stockable, and the singular lookup answering otherwise would let a write
+ * land against something the plural read has already stopped showing as stock.
+ * The two questions are the same question about one id and about all of them,
+ * so they resolve it with the same join rather than with two rules that drift.
+ *
+ * The join is an inner one and cannot change *whether* a row comes back:
+ * `product_id` is `NOT NULL` and references `products`, so every variant has
+ * exactly one parent. It changes only what `is_active` means. That matters —
+ * `null` here is "no such variant", which callers answer with a `404`, and an
+ * existing variant under a retired product must stay distinguishable from a
+ * uuid that was never issued.
  */
 export async function findStockableVariant(
   db: Queryable,
   variantId: string,
 ): Promise<StockableVariant | null> {
   const { rows } = await db.query<Pick<VariantRow, 'id' | 'product_id' | 'is_active'>>(
-    `SELECT id, product_id, is_active
-       FROM product_variants
-      WHERE id = $1`,
+    `SELECT v.id, v.product_id, (v.is_active AND p.is_active) AS is_active
+       FROM product_variants v
+       JOIN products p ON p.id = v.product_id
+      WHERE v.id = $1`,
     [variantId],
   );
   const row = rows[0];

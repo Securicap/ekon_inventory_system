@@ -52,8 +52,16 @@ export interface CatalogService {
    * lint rule cannot — query `product_variants` itself: the catalog owns those
    * tables, so the question crosses the boundary as a call rather than as a
    * join. It answers only what a stock workflow has to decide before it posts,
-   * and deliberately does not decide it: whether an inactive variant is a `404`
-   * or a `409` is the calling workflow's rule, not the catalog's.
+   * and deliberately does not decide it: whether an unstockable variant is a
+   * `404` or a `409` is the calling workflow's rule, not the catalog's.
+   *
+   * The returned `isActive` is **effective stockability** — the variant and its
+   * parent product both active — and not the `product_variants.is_active`
+   * column on its own. The lifecycle rule that combines them is the catalog's,
+   * which is why it is applied here rather than left for two inventory
+   * workflows to remember separately. `null` still means only "no such
+   * variant": a variant under a withdrawn product exists and comes back
+   * unstockable, so the caller can tell it from a uuid nobody ever issued.
    */
   findStockableVariant(variantId: string): Promise<StockableVariant | null>;
   /**

@@ -334,7 +334,7 @@ the pre-transaction lookup and the post-claim replay. No workflow queries
 | No session, or one that no longer resolves                                                                  | `401`  | `UNAUTHENTICATED`                        |
 | Signed in without `inventory.receive`                                                                       | `403`  | `FORBIDDEN`                              |
 | Variant or location does not exist                                                                          | `404`  | `NOT_FOUND`                              |
-| Variant or location is inactive                                                                             | `409`  | `CONFLICT`                               |
+| Variant not stockable (it or its product is inactive), or location inactive                                 | `409`  | `CONFLICT`                               |
 | Operation id reused for a different command                                                                 | `409`  | `OPERATION_REPLAYED_WITH_DIFFERENT_BODY` |
 | Anything unexpected                                                                                         | `500`  | `INTERNAL`                               |
 
@@ -354,17 +354,25 @@ Variants belong to the **catalog** module, so the check goes through
 `catalogService.findStockableVariant` rather than a query against
 `product_variants`. Locations are this module's own table.
 
-**Only the variant's own `is_active` is consulted today.** No production path
-deactivates a product or a variant — the catalog creates and lists, and
-`catalog.deactivate` has no route or service method — so an inactive product
-with an active variant cannot currently arise. When catalog deactivation lands
-it must carry this invariant with it:
+**The variant check honours the parent product too**, because the catalog
+answers this one:
 
 > A variant is stockable only when both the variant **and its parent product**
 > are active.
 
-Whether that is enforced by cascading deactivation to variants or by widening
-this check is a decision for that PR, not a guess made in advance here.
+`findStockableVariant` returns that combined answer as `isActive`, so this
+module keeps one simple test — "may I post against this?" — and never learns a
+`productIsActive` concept or the order in which the two flags are read. The
+current stock read applies the identical rule through
+`listStockableVariants()`, so a variant that has stopped being shown as stock
+has stopped accepting writes at the same moment, which is the whole point of
+letting the catalog own it.
+
+No production path deactivates a product or a variant yet — the catalog creates
+and lists, and `catalog.deactivate` has no route or service method — so neither
+state can currently arise through the API. The rule is enforced anyway: the
+workflow that lands deactivation should be able to set a column and stop, and
+the invariant should not be waiting on it to be remembered.
 
 **Authentication precedes validation.** Enforcement is an `onRequest` hook, so
 an anonymous request with a malformed body is `401` before anything in it is
@@ -614,7 +622,7 @@ the posting engine's own concurrency suite uses, shared in
 | No session, or one that no longer resolves                                                                                  | `401`  | `UNAUTHENTICATED`                        |
 | Signed in without `inventory.remove`                                                                                        | `403`  | `FORBIDDEN`                              |
 | Variant or location does not exist                                                                                          | `404`  | `NOT_FOUND`                              |
-| Variant or location is inactive                                                                                             | `409`  | `CONFLICT`                               |
+| Variant not stockable (it or its product is inactive), or location inactive                                                 | `409`  | `CONFLICT`                               |
 | Operation id reused for a different command                                                                                 | `409`  | `OPERATION_REPLAYED_WITH_DIFFERENT_BODY` |
 | The shelf does not hold that much                                                                                           | `422`  | `INSUFFICIENT_STOCK`                     |
 | Anything unexpected                                                                                                         | `500`  | `INTERNAL`                               |
