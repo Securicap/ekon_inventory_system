@@ -42,8 +42,9 @@ const KEYS_ADDED_BY_AUTHENTICATION = [
   'home.welcome',
   'catalog.title',
   'catalog.empty',
-  'inventory.title',
-  'inventory.empty',
+  // `inventory.title` and `inventory.empty` named the location list this
+  // screen used to be. The stock screen replaced it, and its strings are
+  // asserted in `tests/stock/localization.test.tsx`.
 ] as const;
 
 describe('translations', () => {

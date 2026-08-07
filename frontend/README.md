@@ -136,15 +136,87 @@ is a few minutes fast must not block a delivery sitting on the counter.
 
 Only active products, active variants, and active locations are offered, and a
 selection that stops being offered is dropped rather than silently sent. The
-screen reads the catalog and the locations it already had; it adds no balance
-query, and it invalidates nothing after a success — receiving changes neither
-the catalog nor the list of counters. **The visual design is still temporary**,
-like every other screen here.
+screen reads the catalog and the locations it already had, and adds no balance
+query of its own.
+
+**A confirmed receipt invalidates the current-stock read**, and that is the only
+thing it invalidates. Receiving creates no product and opens no counter, so the
+catalog and the location list are left alone; what it does change is the number
+the stock screen exists to say. The invalidation happens after the confirmation
+is on screen and its failure is swallowed on purpose — the movement is permanent
+the moment the server answers `201`, and tidying a cache must never turn a
+booked delivery into "did that work?". A replay of an earlier receipt answers
+`201` too and invalidates identically. A refusal and a dropped connection
+invalidate nothing: nothing is known to have moved. **The visual design is still
+temporary**, like every other screen here.
+
+## Current stock
+
+The Stock destination answers the question the counter asks all day: **what do
+we have, and where is it?** It is gated on **`inventory.read`**, and it is the
+screen the old location list became — locations are not a destination of their
+own, because their names arrive inside the stock answer.
+
+```
+src/screens/InventoryScreen.tsx   the cards, the search, the refresh, the empty states
+src/lib/inventoryQueries.ts       the balance read, and the query key two screens share
+src/lib/stock.ts                  client-side search over what the server already sent
+src/lib/variants.ts               how a variant's attributes are said, here and in receiving
+```
+
+**One read, and it is enough.** `GET /api/inventory/balances` already carries
+the product name, the SKU, the attributes, and every active location's name, so
+this screen does not fetch the catalog and does not fetch the location list.
+Assembling the same picture out of three requests would be two more round trips
+on a bad connection and three chances for the pieces to disagree. The response
+is parsed with the shared schema on the way in, like a receipt's is.
+
+**Every active location is shown, including the empty ones.** A zero is an
+answer — "there is none in the Main Store" — and a shelf dropped for being empty
+reads as a shelf that does not exist, which sends somebody to the wrong end of
+the shop. The default location is marked with a translated word, never a colour.
+
+Three answers with nothing in the list, kept apart, because they need different
+things done about them:
+
+| What came back                 | What the screen says                        |
+| ------------------------------ | ------------------------------------------- |
+| `[]`                           | no active product is available to stock yet |
+| a variant with `locations: []` | the row, and: there is no active location   |
+| a search that matched none     | nothing matches this search                 |
+
+The last one is not the first one. A shop with stock that a search missed is not
+a shop with no stock, and telling somebody the wrong one sends them to fix the
+wrong thing.
+
+**The search is entirely in the browser**, over a response the server already
+sent in full: product name, SKU, attribute names, and attribute values, matched
+case- and accent-insensitively so a keyboard without `è` still finds `gwosè`.
+For a single shop the whole active picture is small and bounded; a request per
+keystroke on a connection that drops would make the field unusable at exactly
+the counter it is for. There is no search endpoint, no query parameter, and no
+fuzzy-matching dependency. Location names are deliberately not searchable —
+"everything in the backroom" is a different question, and a substring match
+would answer it while still showing every other location's quantity.
+
+**Refreshing is a button, not a timer.** No polling, no interval, no
+subscription. Somebody presses it when they have reason to think the number
+moved; it re-reads the balances alone, keeps what was typed in the search field,
+leaves the numbers on screen while the new ones are on their way, and is
+disabled while a read is in flight so it cannot be started twice.
+
+**Nothing here changes anything.** No adjust, no removal, no count, no history,
+and the cards are not clickable — a card that looked like a control would be
+promising one that does not exist yet. Deliberately absent from the rows, too:
+the variant, product, and location ids, and `updatedAt`. That last one says when
+a projection moved, not when anybody counted, and a screen that showed it as a
+business fact would invite somebody to trust it as one.
 
 ## Routing
 
 There is none, deliberately. One authentication boundary, and inside it a shell
-that swaps its main panel between four temporary screens. A router would buy
+that swaps its main panel between four temporary screens — home, products,
+stock, and receiving. A router would buy
 addressable URLs for screens that are about to be replaced, and would have to be
 replaced with them. A hard refresh still works: the backend's single-page
 fallback serves `index.html` for any non-`/api/` path.
@@ -163,13 +235,23 @@ TanStack Query, with defaults tuned for an unreliable connection in
 `app/providers.tsx`: reads retry, writes never do. `/api/auth/me` is a query
 like any other, asked once per page load — there is no polling and no periodic
 `/me`, because a revocation lands on the next protected request the person
-makes, which is the moment it matters.
+makes, which is the moment it matters. Nothing in this application polls, and
+nothing refreshes on a timer.
+
+A query key that two screens depend on is **defined once and imported**, never
+written out twice. `inventoryBalancesQueryKey` lives in `lib/inventoryQueries.ts`
+because the stock screen reads it and receiving invalidates it: invalidation
+matches on key equality, so two literals would drift apart silently — the
+receipt would succeed, the numbers would stay stale, and nothing would fail.
+Receiving imports the key, not the screen; a write that had to pull in a
+component to learn what to invalidate would be a dependency pointing the wrong
+way.
 
 ## Still missing
 
-- **stock quantities.** Receiving reports the balance the server answered with,
-  and nothing else reads one: there is no balance API, no stock screen, and no
-  low-stock warning;
+- **anything about stock beyond what is on the shelf now.** No movement history,
+  no audit drawer, no low-stock threshold or colour, no reorder point, no
+  valuation, no cost, and no supplier — and no sorting, paging, or export;
 - adjustments, physical counts, reversal, and stock removal;
 - no user management, no password change, and no password reset;
 - no audit log, no reports, no notifications;
@@ -179,6 +261,7 @@ makes, which is the moment it matters.
   persists nothing;
 - the final visual design.
 
-Receiving is the first inventory workflow that works end to end. Full production
-deployment is reviewed now that it does — see
+Receiving and current stock close the first loop: an employee books in a
+delivery and then reads the number it produced, on the same laptop, in their own
+language. Full production deployment is reviewed now that it does — see
 [docs/06-operations/deployment.md](../docs/06-operations/deployment.md).

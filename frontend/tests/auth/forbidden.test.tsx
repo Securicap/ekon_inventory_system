@@ -2,7 +2,7 @@ import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import ht from '../../src/i18n/ht.json';
 import { apiFailure, json, mockApi } from '../helpers/fetchMock.js';
-import { locationFixture, userFixture, userResponse } from '../helpers/fixtures.js';
+import { balanceFixture, userFixture, userResponse } from '../helpers/fixtures.js';
 import { renderApp, settle } from '../helpers/renderApp.js';
 
 /**
@@ -62,7 +62,7 @@ describe('a forbidden business request', () => {
         userResponse(userFixture({ capabilities: ['catalog.read', 'inventory.read'] })),
       ),
       'GET /api/catalog/products': apiFailure('FORBIDDEN', 403),
-      'GET /api/inventory/locations': json([locationFixture({ name: 'Main Store' })]),
+      'GET /api/inventory/balances': json([balanceFixture({ productName: 'Diri' })]),
     });
     renderApp();
     await screen.findByText('Marie Joseph');
@@ -71,6 +71,6 @@ describe('a forbidden business request', () => {
     await screen.findByRole('alert');
 
     fireEvent.click(screen.getByRole('button', { name: ht['nav.stock'] }));
-    expect(await screen.findByText('Main Store')).toBeInTheDocument();
+    expect(await screen.findByText('Diri')).toBeInTheDocument();
   });
 });

@@ -2,7 +2,7 @@ import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import ht from '../../src/i18n/ht.json';
 import { apiFailure, json, mockApi } from '../helpers/fetchMock.js';
-import { locationFixture, productFixture, userResponse } from '../helpers/fixtures.js';
+import { balanceFixture, productFixture, userResponse } from '../helpers/fixtures.js';
 import { renderApp, settle } from '../helpers/renderApp.js';
 
 /**
@@ -67,7 +67,7 @@ describe('a session that ends mid-use', () => {
   it('leaves nothing a signed-out browser could still read', async () => {
     mockApi({
       'GET /api/auth/me': json(userResponse()),
-      'GET /api/inventory/locations': json([locationFixture({ name: 'Main Store' })]),
+      'GET /api/inventory/balances': json([balanceFixture({ productName: 'Diri' })]),
       'GET /api/catalog/products': [json([productFixture()]), apiFailure('UNAUTHENTICATED', 401)],
     });
     const { queryClient } = renderApp();
@@ -75,15 +75,15 @@ describe('a session that ends mid-use', () => {
 
     // Read two screens, then have the session end on the third request.
     fireEvent.click(screen.getByRole('button', { name: ht['nav.stock'] }));
-    await screen.findByText('Main Store');
+    await screen.findByRole('heading', { name: 'Diri', level: 3 });
     fireEvent.click(screen.getByRole('button', { name: ht['nav.products'] }));
-    await screen.findByText('Diri');
+    await screen.findByRole('heading', { name: 'Diri', level: 3 });
 
     void queryClient.refetchQueries({ queryKey: ['catalog', 'products'] });
 
     await screen.findByLabelText(ht['auth.username']);
-    expect(queryClient.getQueryData(['inventory', 'locations'])).toBeUndefined();
+    expect(queryClient.getQueryData(['inventory', 'balances'])).toBeUndefined();
     expect(queryClient.getQueryData(['catalog', 'products'])).toBeUndefined();
-    expect(screen.queryByText('Main Store')).toBeNull();
+    expect(screen.queryByText('Diri')).toBeNull();
   });
 });
