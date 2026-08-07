@@ -156,7 +156,7 @@ export function balanceFixture(
   });
 
   return variantStockBalanceSchema.parse({
-    variantId: overrides.variantId ?? `${productId.slice(0, -2)}f1`,
+    variantId: overrides.variantId ?? `${productId.slice(0, -2)}f${productId.slice(-1)}`,
     productId,
     productName: overrides.productName ?? 'Diri',
     sku: overrides.sku ?? 'EKN-AB12CD34',

@@ -51,7 +51,8 @@ a test fails if the two ever disagree.
 | `EMPLOYEE`    | `catalog.read`, `inventory.read`, `inventory.receive`, `inventory.remove` |
 
 An employee reads the catalog, reads stock, books in what arrives, and records
-what leaves. That last one is `inventory.remove`, granted by migration 0008:
+what leaves — all four through screens that exist. That last one is
+`inventory.remove`, granted by migration 0008:
 selling a bottle, discarding a broken one, and taking one for the shop's own use
 are what somebody at the counter does all day, and an operating model that made
 them fetch a manager to record a sale would be one nobody used — the stock would

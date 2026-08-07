@@ -855,8 +855,12 @@ stock that left; `ADJUSTMENT_OUT` records a balance that was wrong. The second
 has no route, no service, and no workflow — `inventory.adjust` still opens
 nothing.
 
-The **removal screen** is the next piece of frontend work; the API it will call
-exists now. Deferred with removal specifically, and deliberately: sales,
+The **removal screen** now calls this endpoint — see
+[frontend/README.md](../../../../frontend/README.md). It drives its choices from
+`GET /api/inventory/balances`, shows what each shelf holds, refuses a zero shelf
+as a choice, and treats `INSUFFICIENT_STOCK` as a definitive refusal that a new
+command must answer rather than a retry. Deferred with removal specifically, and
+deliberately: sales,
 customers, prices, payments, taxes, receipts, refunds, supplier and purchase
 returns, free-text or per-shop reason codes, notes, multi-line or batch removal,
 barcode scanning, and any reservation or allocation of stock. None of them is a

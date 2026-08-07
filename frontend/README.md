@@ -78,6 +78,13 @@ nothing. Receiving is gated on **`inventory.receive`** alone — reading stock a
 booking it in are different permissions, and somebody holding only the first
 must not be shown a door the API will shut.
 
+Each inventory door has its own key, and the keys are not interchangeable:
+Stock on **`inventory.read`**, Receiving on **`inventory.receive`**, Removal on
+**`inventory.remove`**. Somebody may hold any combination, and neither write
+door opens on the read capability or on the other's. `inventory.adjust` opens
+nothing at all — correcting a balance that was wrong is not recording that stock
+left, and that screen does not exist.
+
 **A hidden link is not a security boundary.** Capabilities arrive from `/me` and
 live in a browser, where anything can be edited. Every request is checked again
 by the server, which is the authority. Hiding a link somebody cannot use is a
@@ -212,11 +219,109 @@ the variant, product, and location ids, and `updatedAt`. That last one says when
 a projection moved, not when anybody counted, and a screen that showed it as a
 business fact would invite somebody to trust it as one.
 
+## Removal
+
+The other half of the loop, and the last thing a counter needs to keep its
+numbers honest: recording that stock **left**. One item, one shelf, one
+quantity, one reason, one moment. Gated on **`inventory.remove`**, which every
+role holds — including `EMPLOYEE`, because selling a bottle is what somebody at
+the counter does all day.
+
+```
+src/screens/RemovalScreen.tsx   the form, its states, and the operation id
+src/lib/removal.ts              choices · the shelf a form starts on · validation
+src/lib/removalApi.ts           POST /api/inventory/remove, typed by the shared schemas
+src/lib/businessTime.ts         one local-time conversion, shared with receiving
+src/lib/variants.ts             one variant label, shared with receiving and stock
+```
+
+**It reads the balances and nothing else.** `GET /api/inventory/balances`, under
+the same `inventoryBalancesQueryKey` the stock screen uses, because the question
+this form asks is exactly the one that response answers: _which shelf am I
+taking from, and how many are there now?_ No catalog read, no location read —
+two more requests on a bad connection and three chances for the pieces to
+disagree about which shelf holds what. Walking from Stock to Removal asks the
+server nothing new.
+
+**The numbers are advisory, and the screen never pretends otherwise.** They are
+the last balance read; somebody else at the counter may take the last two
+bottles in between. The server decides, under the row lock it already holds. So
+the chosen shelf's quantity is stated plainly — _this location currently has
+10_ — and never as "available", "reserved", or "on order", none of which this
+system has.
+
+| What the employee sees               | What it means                          |
+| ------------------------------------ | -------------------------------------- |
+| `Diri — gwosè: 5 mamit — EKN-… — 14` | the item, and its total across shelves |
+| `Main Store — 10`, `Backroom — 4`    | each shelf, and what it holds          |
+| an option greyed out                 | zero there; visible, not selectable    |
+
+**Zero is shown and refused, never hidden.** An item at zero everywhere stays in
+the list and cannot be chosen — dropping it would make a shop that is out of
+rice look like a shop that never sold rice. A shelf at zero stays visible for
+the same reason: an employee who cannot see that the Main Store is empty will go
+looking for stock that is in the back. Neither can be selected, so nobody
+travels to a guaranteed refusal.
+
+**The form starts on the right shelf, or on none.** The default location when it
+actually holds something; failing that, the only shelf with stock; otherwise
+nothing. A default location holding zero is never preselected — it is the one
+plausible-looking wrong answer, and it would open the form on a shelf that
+cannot satisfy any quantity.
+
+**Reasons are words on screen and codes on the wire.** `Yon kliyan achte l` /
+`Vendu à un client` goes out as `SOLD`; nobody reads `INTERNAL_USE`, and no
+report ever counts "Itilize nan biznis la". There is no free-text reason: one
+somebody can type is one nobody can count. And `SOLD` is a reason a unit left
+inventory — there is no customer, price, receipt, or payment anywhere in this
+application.
+
+**The operation id works exactly as receiving's does.** One intended removal,
+one id, generated when the removal begins and sent unchanged by every retry.
+
+| What happens                       | What the id does                         |
+| ---------------------------------- | ---------------------------------------- |
+| the form opens                     | a new UUIDv7                             |
+| the button is pressed              | unchanged                                |
+| the connection drops, then a retry | unchanged — the same command, sent again |
+| **Remove another item**            | a new one                                |
+| **Start a new removal**            | a new one                                |
+
+After any failure the form freezes: the exact submitted command is kept, every
+canonical field is disabled, and the way out is an explicit choice. Editing a
+field under an id whose outcome is unknown would turn a safe retry into a
+conflict.
+
+**A shortfall is not an uncertain outcome, and is not offered a retry.** When
+the server answers `422 INSUFFICIENT_STOCK` the transaction rolled back and the
+stock did not move — sending the identical command again cannot work until the
+command itself changes. So the screen says what happened, says what to do, and
+re-reads the balances immediately so the corrected removal is chosen against
+what is actually there. **A corrected removal is a new removal with a new id.**
+Nothing is clamped, no quantity is silently reduced, no other shelf is chosen,
+and nothing is resubmitted automatically.
+
+The same immediate re-read follows a `404` and a `409` about an item or shelf:
+all three mean the numbers on screen have moved. A dropped connection does not,
+because nothing is known to have changed and the retry is still the right move.
+
+**A confirmed `201` invalidates the shared balance key**, fire and forget, after
+the confirmation is on screen and with its rejection swallowed — the movement is
+permanent the moment the server answers, and tidying a cache must never reach
+back and unsay it. Because the query is mounted on this very screen, the numbers
+refresh in place. A replay of an earlier removal answers `201` too and
+invalidates identically. Nothing else invalidates: not a `400`, `403`, `404`,
+`409`, `422`, a dropped connection, or an unresolved `5xx`.
+
+**Nothing is written to browser storage**, and nothing is optimistically
+changed. Only the server's answer proves the stock moved. **The visual design is
+still temporary**, like every other screen here.
+
 ## Routing
 
 There is none, deliberately. One authentication boundary, and inside it a shell
-that swaps its main panel between four temporary screens — home, products,
-stock, and receiving. A router would buy
+that swaps its main panel between five temporary screens — home, products,
+stock, receiving, and removal. A router would buy
 addressable URLs for screens that are about to be replaced, and would have to be
 replaced with them. A hard refresh still works: the backend's single-page
 fallback serves `index.html` for any non-`/api/` path.
@@ -238,25 +343,26 @@ like any other, asked once per page load — there is no polling and no periodic
 makes, which is the moment it matters. Nothing in this application polls, and
 nothing refreshes on a timer.
 
-A query key that two screens depend on is **defined once and imported**, never
-written out twice. `inventoryBalancesQueryKey` lives in `lib/inventoryQueries.ts`
-because the stock screen reads it and receiving invalidates it: invalidation
-matches on key equality, so two literals would drift apart silently — the
-receipt would succeed, the numbers would stay stale, and nothing would fail.
-Receiving imports the key, not the screen; a write that had to pull in a
-component to learn what to invalidate would be a dependency pointing the wrong
-way.
+A query key that several screens depend on is **defined once and imported**,
+never written out twice. `inventoryBalancesQueryKey` lives in
+`lib/inventoryQueries.ts` and now has three users: Stock reads it, Removal reads
+it _and_ invalidates it, and Receiving invalidates it. Invalidation matches on
+key equality, so two literals would drift apart silently — the write would
+succeed, the numbers would stay stale, and nothing would fail. The writes import
+the key, not the screen; a write that had to pull in a component to learn what
+to invalidate would be a dependency pointing the wrong way.
 
 ## Still missing
 
 - **anything about stock beyond what is on the shelf now.** No movement history,
   no audit drawer, no low-stock threshold or colour, no reorder point, no
   valuation, no cost, and no supplier — and no sorting, paging, or export;
-- **recording stock that left.** `POST /api/inventory/remove` exists and works —
-  an `ISSUE` for a quantity that was sold, damaged, or used internally, behind
-  `inventory.remove`, which every role including `EMPLOYEE` holds. There is no
-  screen for it yet, and that is the next piece of frontend work;
-- adjustments, physical counts, and reversal;
+- **adjustments.** Removal records that stock _left_; an adjustment records that
+  the _balance was wrong_, and it has its own capability, its own permanent
+  movement type, and no API or screen at all. `inventory.adjust` opens nothing;
+- physical counts and reversal;
+- **any sales domain.** `SOLD` is a removal reason. There is no sale, order,
+  customer, price, payment, tax, receipt, or refund, and none is planned here;
 - no user management, no password change, and no password reset;
 - no audit log, no reports, no notifications;
 - offline operation. Connectivity failures are visible and a retry is safe, but
@@ -265,7 +371,7 @@ way.
   persists nothing;
 - the final visual design.
 
-Receiving and current stock close the first loop: an employee books in a
-delivery and then reads the number it produced, on the same laptop, in their own
-language. Full production deployment is reviewed now that it does — see
+Receiving, current stock, and removal close the operating loop: an employee
+books in a delivery, reads the number it produced, and records what leaves — on
+the same laptop, in their own language, with every retry safe. Full production deployment is reviewed now that it does — see
 [docs/06-operations/deployment.md](../docs/06-operations/deployment.md).

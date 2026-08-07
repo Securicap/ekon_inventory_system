@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import type { Capability, Role } from '@ekon/shared';
+import { DEFAULT_ROLE_CAPABILITIES, type Capability, type Role } from '@ekon/shared';
 import { hasCapability } from '../../src/auth/capabilities.js';
 import ht from '../../src/i18n/ht.json';
 import { json, mockApi } from '../helpers/fetchMock.js';
@@ -23,6 +23,7 @@ async function signedInAs(options: {
     ),
     'GET /api/catalog/products': json([productFixture()]),
     'GET /api/inventory/locations': json([locationFixture()]),
+    'GET /api/inventory/balances': json([]),
   });
   renderApp();
   await screen.findByText('Marie Joseph');
@@ -85,6 +86,53 @@ describe('capability-aware navigation', () => {
     expect(navigation()).toEqual([ht['nav.home'], ht['nav.receive']]);
   });
 
+  it('offers removal to somebody who may remove stock', async () => {
+    await signedInAs({ capabilities: ['inventory.read', 'inventory.remove'] });
+    expect(navigation()).toEqual([ht['nav.home'], ht['nav.stock'], ht['nav.remove']]);
+  });
+
+  it('offers removal on the capability alone, without inventory.read', async () => {
+    // Recording that stock left and reading what is on the shelf are different
+    // permissions, and holding only the first is a real combination.
+    await signedInAs({ capabilities: ['inventory.remove'] });
+    expect(navigation()).toEqual([ht['nav.home'], ht['nav.remove']]);
+  });
+
+  it('does not offer removal to somebody who may only receive stock', async () => {
+    // Putting stock on a shelf and taking it off are different acts that
+    // different people are trusted with. Neither key opens the other's door.
+    await signedInAs({ capabilities: ['inventory.read', 'inventory.receive'] });
+    expect(screen.queryByRole('button', { name: ht['nav.remove'] })).toBeNull();
+  });
+
+  it('does not offer removal for inventory.adjust', async () => {
+    // Correcting a balance that was wrong is not recording that stock left,
+    // and the adjustment screen does not exist. A capability is not a
+    // destination.
+    await signedInAs({ capabilities: ['inventory.adjust'] });
+    expect(navigation()).toEqual([ht['nav.home']]);
+    expect(screen.queryByRole('button', { name: ht['nav.remove'] })).toBeNull();
+  });
+
+  it('offers removal on the employee role default grants', async () => {
+    // The operating model the capability exists for: an ordinary employee at
+    // the counter can record what leaves, on the grants their role arrives
+    // with, without anybody configuring anything.
+    await signedInAs({
+      role: 'EMPLOYEE',
+      capabilities: DEFAULT_ROLE_CAPABILITIES.EMPLOYEE ?? [],
+    });
+    expect(navigation()).toEqual([
+      ht['nav.home'],
+      ht['nav.products'],
+      ht['nav.stock'],
+      ht['nav.receive'],
+      ht['nav.remove'],
+    ]);
+    // And not the door that would let them make a shortfall disappear.
+    expect(screen.queryByRole('button', { name: ht['nav.adjust'] })).toBeNull();
+  });
+
   it('offers no user management, audit, or reports for the capabilities that allow them', async () => {
     await signedInAs({
       capabilities: ['identity.manage', 'audit.read', 'reports.export'],
@@ -106,13 +154,14 @@ describe('capability-aware navigation', () => {
 
     await signedInAs({
       role: 'EMPLOYEE',
-      capabilities: ['catalog.read', 'inventory.read', 'inventory.receive'],
+      capabilities: ['catalog.read', 'inventory.read', 'inventory.receive', 'inventory.remove'],
     });
     expect(navigation()).toEqual([
       ht['nav.home'],
       ht['nav.products'],
       ht['nav.stock'],
       ht['nav.receive'],
+      ht['nav.remove'],
     ]);
   });
 
