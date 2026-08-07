@@ -195,6 +195,7 @@ describe('GET /api/auth/me', () => {
       'catalog.read',
       'inventory.read',
       'inventory.receive',
+      'inventory.remove',
     ]);
     // Same session, same cookie. The demotion did not sign anybody out.
     expect(await sessions(db.pool)).toHaveLength(1);

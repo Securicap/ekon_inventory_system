@@ -18,14 +18,29 @@ describe('capability model', () => {
     }
   });
 
-  it('gives an employee exactly the three capabilities the counter job needs', () => {
-    // Read the catalog, read stock, book in what arrives. Anything beyond that
-    // is granted deliberately, never inherited from a default.
+  it('gives an employee exactly the four capabilities the counter job needs', () => {
+    // Read the catalog, read stock, book in what arrives, record what leaves.
+    // Anything beyond that is granted deliberately, never inherited from a
+    // default.
     expect([...(DEFAULT_ROLE_CAPABILITIES.EMPLOYEE ?? [])].sort()).toEqual([
       'catalog.read',
       'inventory.read',
       'inventory.receive',
+      'inventory.remove',
     ]);
+  });
+
+  it('separates removing stock from adjusting it', () => {
+    // Recording that stock left is the counter job. Correcting a balance that
+    // was wrong is authority over the records themselves, and it can make a
+    // shortfall disappear — so an employee holding the first must not inherit
+    // the second, and granting `inventory.adjust` to enable routine removal
+    // would have done exactly that.
+    const employee = DEFAULT_ROLE_CAPABILITIES.EMPLOYEE ?? [];
+    expect(employee).toContain('inventory.remove');
+    expect(employee).not.toContain('inventory.adjust');
+    expect(CAPABILITIES).toContain('inventory.remove');
+    expect(CAPABILITIES).toContain('inventory.adjust');
   });
 
   it('does not give employees privileged capabilities', () => {

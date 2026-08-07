@@ -39,6 +39,13 @@ the balance projection, and every rule that protects them.
   read from the balance projection. Requires `inventory.read`. It is the first
   thing that reads the ledger's projection out to a screen, and it writes
   nothing.
+- **The stock removal workflow** (`removalService.ts`,
+  `domain/removalRequestHash.ts`) and `POST /api/inventory/remove` — ordinary
+  stock leaving: sold, damaged, or consumed internally. Posts an `ISSUE`
+  movement of a negative delta through the same posting engine, under the new
+  `inventory.remove` capability. It is the first thing in the system that takes
+  stock _off_ a shelf, and the first workflow that can be refused by the stock
+  floor.
 
 ## The posting engine
 
@@ -364,6 +371,267 @@ an anonymous request with a malformed body is `401` before anything in it is
 parsed — answering `400` would tell a caller who is nobody which fields the
 endpoint expects.
 
+## Stock removal
+
+Removal records that **a positive quantity of one variant left one location for
+one reason at one business time.** It is the counterpart to receiving and the
+other half of the loop a shop lives in: stock comes in, stock goes out.
+
+```
+POST /api/inventory/remove      inventory.remove      ISSUE, quantity_delta < 0
+```
+
+### `ISSUE` is not `ADJUSTMENT_OUT`, and the difference is permanent
+
+This is the decision the whole PR turns on.
+
+| What happened                                                     | Movement                 |
+| ----------------------------------------------------------------- | ------------------------ |
+| A customer bought three bottles                                   | `ISSUE` / `SOLD`         |
+| Two bottles broke and were discarded                              | `ISSUE` / `DAMAGED`      |
+| One bottle was used by staff                                      | `ISSUE` / `INTERNAL_USE` |
+| The system says 15, the shelf holds 13, and an old error is found | `ADJUSTMENT_OUT`         |
+
+An **issue** says stock genuinely left the shelf. An **adjustment** says the
+recorded balance was wrong and somebody corrected it downward — the stock had
+already gone, or had never been there at all. The two look identical in a
+balance and mean opposite things in a history: the first is trade, the second is
+a recording error. A shop that cannot tell them apart cannot answer "how much
+did we sell this month?" or "how much are we losing?", and both questions are
+asked of the same column.
+
+The ledger is append-only, so a movement written under the wrong one of them is
+wrong **forever**: a compensating movement can undo the quantity but cannot
+un-say what the original claimed happened. That is why the distinction lives in
+the movement vocabulary rather than in a reason code somebody could pick
+carelessly, and why routine removal did not simply reuse `ADJUSTMENT_OUT`.
+
+The type is `ISSUE` and not `SALE`, `ORDER`, `SHIPMENT`, or `RETURN`. Those name
+business domains this system does not have, and a permanent ledger column that
+referred to one would be a claim about a module nobody has designed. **Stock
+leaving is the fact; whether it was sold is the reason.**
+
+### `SOLD` is a reason, not a sales module
+
+There is no sale entity here, no transaction, no receipt, no customer, no
+payment, no tax, no line item, no price, no revenue, and no refund. The
+inventory ledger records only _why_ stock left. A point-of-sale module, if one
+is ever built, would call this workflow — or an orchestration above it — rather
+than teach the ledger about money. Nothing in this PR designs that.
+
+### The reasons
+
+A closed set in `@ekon/shared`, deliberately short:
+
+```text
+SOLD           a customer bought it
+DAMAGED        broken, spoiled, or otherwise unsellable, and discarded
+INTERNAL_USE   the business consumed it itself
+OTHER          a legitimate removal that is none of the above
+```
+
+These are the categories somebody at a counter can answer honestly without
+stopping to think, which is the only kind that stays accurate. A longer list
+gets used as a guess, and a guess in a permanent ledger is worse than a coarse
+truth. `OTHER` exists because the alternative is somebody choosing a _wrong_
+reason from a list with no right one.
+
+The public request field is **`reason`**; the ledger column is `reason_code`,
+and the workflow maps one to the other unchanged. The request schema _refuses_ a
+`reasonCode` field outright — a client that could write the column directly
+could store a reason no screen offers and no report counts. **The stored value
+is the code, never a translation**: `SOLD` means the same thing in the database
+whatever language the person choosing it was reading, and it is still readable
+when the interface has been rewritten twice. Free text is not accepted at all: a
+reason somebody can type is a reason nobody can count.
+
+`ISSUE` requires a reason at the database level (`inventory_movements_reason_required`,
+0008), alongside both adjustment types. The type says stock left; the reason
+says whether that was trade or loss, and the movement without it is half a
+record.
+
+### `POST /api/inventory/remove`
+
+Requires the **`inventory.remove`** capability, declared in the route's Fastify
+`config` and enforced by the identity module before the handler runs: no session
+is `401`, a session without the capability is `403`. It is deliberately **not**
+`inventory.adjust`. Recording that stock left is what somebody at the counter
+does all day; correcting a balance that was wrong is authority over the records
+themselves, and gating the first behind the second would have handed every
+employee the power to make a shortfall disappear in order to let them record a
+sale. All four roles hold `inventory.remove`, including `EMPLOYEE`; only
+`inventory.adjust` remains withheld from them.
+
+Receiving keeps its own endpoint and its own capability. There is no generic
+`/api/inventory/movements` with a direction field: booking in a delivery and
+taking a bottle off the shelf are different business acts that different people
+are trusted with, and a generic endpoint would make that difference a value in a
+body rather than a door somebody was given a key to.
+
+```jsonc
+// request
+{
+  "operationId": "0198f0a0-…", // client-generated, reused on every retry
+  "variantId": "0198f0a0-…",
+  "locationId": "0198f0a0-…",
+  "quantity": 3,               // positive, whole units — the workflow owns the sign
+  "reason": "SOLD",
+  "occurredAt": "2026-08-06T14:30:00.000Z"
+}
+
+// 201, and 201 again on an exact retry
+{
+  "operationId": "0198f0a0-…",
+  "movementId": "0198f0a0-…",
+  "quantityAfter": 7
+}
+```
+
+**The request quantity is positive, always.** A caller never sends
+`quantityDelta: -3`. Negation happens once, inside the workflow that owns the
+meaning, which keeps a signed number out of the contract, out of the request
+hash, and out of every screen — and means a request that could add stock through
+the removal endpoint cannot be written. The schema is `.strict()`, so `userId`,
+`movementId`, `movementType`, `quantityDelta`, `recordedAt`, `quantityBefore`,
+`quantityAfter`, `previousMovementId`, `requestHash`, `operationType`,
+`reasonCode`, and `note` are all _refused_ rather than ignored.
+
+**`occurredAt` is business time**, exactly as in receiving: when the stock
+physically left. It may precede the server's `recorded_at`, an offset is
+accepted as well as `Z`, and the server normalizes to an instant once — before
+hashing and before posting — so `09:30-05:00` and `14:30Z` are the same command.
+A future timestamp is not refused; shop clocks drift, and blocking a sale over
+four minutes would be enforcing nothing the ledger depends on.
+
+**The actor comes from the session.** `requireActor(request)` reads what the
+enforcement hook resolved, and the route passes that id to the service, which
+hands it to the engine as `user_id`. No request schema accepts one.
+
+The response is `movementResultSchema` — the same three fields receiving
+answers with, written once in `@ekon/shared` because both workflows genuinely
+answer the same question. The reason is not echoed: the client sent it.
+
+### The canonical request hash
+
+Seven fields, and the workflow owns them:
+
+```text
+workflow      always "inventory.remove"
+variantId
+locationId
+quantity      the public, positive number
+reason
+occurredAt    normalized to an instant, serialized as ISO-8601 UTC
+actorId       from the session, never from the body
+```
+
+Each one changes the digest independently, which is what lets the posting engine
+tell a retry from an operation id reused for something else. `workflow` is what
+keeps a removal from colliding with a receipt of the same size at the same
+moment, and what will keep it apart from a future point-of-sale workflow that
+also posts `ISSUE` movements.
+
+**The positive quantity is hashed, not the negative delta.** The digest is of
+the request that was made, and there is exactly one way to state it — a hash
+with two spellings of one command cannot recognize a retry. The movement type
+and the delta are deliberately absent for the same reason they are derived:
+`inventory.remove` always posts an `ISSUE`, and the delta is always the negation
+of `quantity`, so a field that cannot vary independently would look like
+protection and provide none.
+
+Absent for the usual reasons: the movement id, `recorded_at`, the quantities
+before and after, the predecessor pointer — all of them the ledger's _answer_ to
+this command — and the operation id itself, which is what the hash is stored
+against. The generic canonicalization is `platform/hash/canonicalRequest.ts` and
+is not reimplemented; `domain/removalRequestHash.ts` is the field set and
+nothing else.
+
+### Settled first, present tense second
+
+Removal follows receiving's ordering exactly:
+
+```text
+build the canonical claim
+    ↓
+ask the engine what this operation already produced   ← findCompletedMovement
+    ↓  completed: return that movement, and stop
+    ↓  a different body under this id: 409, here, before anything else
+validate the variant and the location as they are today
+    ↓
+postMovement
+```
+
+An item sold in the morning and retired from the catalog that afternoon must
+still answer its own retry. The stock has already left the building; a client
+that never saw the first response would otherwise retry forever into a `409`
+about an item it is no longer asking to change. And an operation id used for two
+different commands is a conflict about the id, not a fact about the variant —
+reporting it as "this item is inactive" would send somebody to fix the wrong
+thing, and would change its answer the day the item came back.
+
+`findCompletedMovement` decides nothing about whether a command is _new_. The
+transactional claim inside `postMovement` remains the only authority on who owns
+an operation id. There is no second idempotency mechanism.
+
+### The stock floor
+
+**Removal never reads the balance to decide whether it may proceed.** A
+pre-check would be stale by the time it was used, and two callers could each be
+told there was enough. The posting engine holds the `(variant, location)` balance
+row under `SELECT ... FOR UPDATE`, derives `quantity_after`, and refuses
+`INSUFFICIENT_STOCK` (`422`) if it would go below zero — inside the same
+transaction that would have written the movement, so nothing commits.
+
+What the workflow must never do, and does not:
+
+- remove part of what was asked for;
+- clamp the quantity to what happened to be available;
+- create negative stock;
+- post a zero movement;
+- take the shortfall from another location.
+
+**The requested location is the location stock leaves.** There is no fallback to
+wherever the units happen to be — that would be a transfer nobody recorded.
+
+A refusal leaves the ledger exactly as it found it: no movement, no balance
+change, and no `operations` row, so the operation id is still free for a
+corrected request.
+
+Concurrency is the engine's, unchanged: no advisory lock, no retry loop, no
+isolation change, no application mutex. With ten on the shelf and two concurrent
+removals of seven, exactly one succeeds, the other is refused, the balance ends
+at three, and the loser leaves nothing durable behind. That is asserted over
+HTTP in `tests/integration/inventoryRemoval.test.ts`, with the overlap forced
+and verified against `pg_stat_activity` rather than hoped for — the same barrier
+the posting engine's own concurrency suite uses, shared in
+`tests/helpers/ledgerConcurrency.ts`.
+
+### What removal refuses, and with which status
+
+| Situation                                                                                                                   | Status | Code                                     |
+| --------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------- |
+| Malformed body, bad uuid or timestamp, zero / negative / fractional quantity, unknown reason, unknown or server-owned field | `400`  | `VALIDATION_FAILED`                      |
+| No session, or one that no longer resolves                                                                                  | `401`  | `UNAUTHENTICATED`                        |
+| Signed in without `inventory.remove`                                                                                        | `403`  | `FORBIDDEN`                              |
+| Variant or location does not exist                                                                                          | `404`  | `NOT_FOUND`                              |
+| Variant or location is inactive                                                                                             | `409`  | `CONFLICT`                               |
+| Operation id reused for a different command                                                                                 | `409`  | `OPERATION_REPLAYED_WITH_DIFFERENT_BODY` |
+| The shelf does not hold that much                                                                                           | `422`  | `INSUFFICIENT_STOCK`                     |
+| Anything unexpected                                                                                                         | `500`  | `INTERNAL`                               |
+
+`422` for a shortfall is the platform's existing mapping for
+`INSUFFICIENT_STOCK` and is not special-cased here: the request was well formed
+and understood, and the shelf could not satisfy it.
+
+Entity validation goes through `catalogService.findStockableVariant` and this
+module's own location table, exactly as receiving's does — same questions, same
+statuses, same rules about inactive rows and about authentication preceding
+validation. See _What receiving refuses, and with which status_ above; the only
+difference is the capability and the extra `422`.
+
+**Removing the last unit is a success.** `quantityAfter: 0` is an answer: the
+shelf is empty, not the request refused.
+
 ## Current stock
 
 `GET /api/inventory/balances` answers the question the counter asks all day:
@@ -544,8 +812,9 @@ visible at all.
   `quantity_before >= 0`, `quantity_after >= 0`, and
   `quantity_after = quantity_before + quantity_delta` (INV-3, INV-8).
 - **A closed vocabulary.** `movement_type` is `text` + `CHECK` over exactly the
-  five values in `shared/src/movements.ts`. An integration test compares the two
-  sets, so the database and the wire format cannot drift.
+  six values in `shared/src/movements.ts` (0005, widened by 0008 to admit
+  `ISSUE`). An integration test compares the two sets, so the database and the
+  wire format cannot drift.
 - **A strict chain per (variant, location).** `previous_movement_id` is `UNIQUE`
   (one successor per movement); a partial unique index allows one opening
   movement per chain; a composite foreign key
@@ -557,7 +826,9 @@ visible at all.
   else may name one; nothing reverses itself; and `UNIQUE (reverses_movement_id)`
   means one movement is reversed at most once (INV-2).
 - **Attribution.** `operation_id`, `user_id`, `occurred_at`, and `recorded_at`
-  are `NOT NULL`, and adjustments require a `reason_code` (INV-11). `user_id`
+  are `NOT NULL`, and `inventory_movements_reason_required` (0008, replacing
+  0005's adjustment-only constraint) demands a `reason_code` for an `ISSUE` and
+  for both adjustment types (INV-11). `user_id`
   deliberately carries **no** foreign key until identity exists — a key pointing
   at a fiction is worse than none. Attribution is to the person, never to a
   machine: there is no device, terminal, or session column, and none is coming
@@ -578,6 +849,18 @@ visible at all.
 Adjustments, physical counts, and public reversal. Reversal posting itself.
 Transfers, multi-location stock behaviour, and location management (create /
 rename / deactivate). Offline sync remains deferred too.
+
+**Stock adjustment is not implemented**, and removal is not it. `ISSUE` records
+stock that left; `ADJUSTMENT_OUT` records a balance that was wrong. The second
+has no route, no service, and no workflow — `inventory.adjust` still opens
+nothing.
+
+The **removal screen** is the next piece of frontend work; the API it will call
+exists now. Deferred with removal specifically, and deliberately: sales,
+customers, prices, payments, taxes, receipts, refunds, supplier and purchase
+returns, free-text or per-shop reason codes, notes, multi-line or batch removal,
+barcode scanning, and any reservation or allocation of stock. None of them is a
+stock movement, and none of them is needed to record that stock left.
 
 The **receiving screen** calls `POST /api/inventory/receive`, and the **stock
 screen** now reads `GET /api/inventory/balances` — see

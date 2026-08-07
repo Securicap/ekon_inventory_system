@@ -252,7 +252,11 @@ way.
 - **anything about stock beyond what is on the shelf now.** No movement history,
   no audit drawer, no low-stock threshold or colour, no reorder point, no
   valuation, no cost, and no supplier — and no sorting, paging, or export;
-- adjustments, physical counts, reversal, and stock removal;
+- **recording stock that left.** `POST /api/inventory/remove` exists and works —
+  an `ISSUE` for a quantity that was sold, damaged, or used internally, behind
+  `inventory.remove`, which every role including `EMPLOYEE` holds. There is no
+  screen for it yet, and that is the next piece of frontend work;
+- adjustments, physical counts, and reversal;
 - no user management, no password change, and no password reset;
 - no audit log, no reports, no notifications;
 - offline operation. Connectivity failures are visible and a retry is safe, but

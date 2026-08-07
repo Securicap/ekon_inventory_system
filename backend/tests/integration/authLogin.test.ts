@@ -107,7 +107,12 @@ describe('signing in', () => {
     const body = authenticatedUserResponseSchema.parse(
       (await post({ username: 'jean', password: PASSWORD })).json(),
     );
-    expect(body.user.capabilities).toEqual(['catalog.read', 'inventory.read', 'inventory.receive']);
+    expect(body.user.capabilities).toEqual([
+      'catalog.read',
+      'inventory.read',
+      'inventory.receive',
+      'inventory.remove',
+    ]);
   });
 
   it('accepts the username however it was typed', async () => {

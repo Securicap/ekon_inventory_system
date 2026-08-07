@@ -9,6 +9,7 @@ import { z } from 'zod';
  */
 export const MOVEMENT_TYPES = [
   'RECEIPT',
+  'ISSUE',
   'ADJUSTMENT_IN',
   'ADJUSTMENT_OUT',
   'COUNT_RECONCILIATION',
@@ -18,8 +19,26 @@ export const MOVEMENT_TYPES = [
 export const movementTypeSchema = z.enum(MOVEMENT_TYPES);
 export type MovementType = z.infer<typeof movementTypeSchema>;
 
-/** Movement types that require a non-null `reason_code`. */
+/**
+ * Movement types that require a non-null `reason_code`.
+ *
+ * Two different questions get the same answer here, and it is worth saying why.
+ *
+ * An **adjustment** says the recorded balance was wrong. The number changed
+ * without the stock moving, so the only account of what happened is the reason
+ * somebody wrote down; without it the ledger records an unexplained correction.
+ *
+ * An **issue** says stock left through ordinary operations. The stock really
+ * moved, but "it left" is not yet a business fact anybody can act on — sold,
+ * broken, or taken for the shop's own use are three different things, and a
+ * shop that cannot tell them apart cannot tell trade from loss. So the reason
+ * is the fact, and the type without it is half a record.
+ *
+ * `RECEIPT` carries its reason in its type: stock arrived. A count carries it
+ * in the count, and a reversal in the movement it reverses.
+ */
 export const REASON_REQUIRED_MOVEMENT_TYPES: readonly MovementType[] = [
+  'ISSUE',
   'ADJUSTMENT_IN',
   'ADJUSTMENT_OUT',
 ];
@@ -77,6 +96,39 @@ export const occurredAtSchema = z
   .string()
   .datetime({ offset: true, message: 'occurredAt must be an ISO 8601 timestamp' })
   .refine(isRealCalendarDate, 'occurredAt must be a real calendar date');
+
+/**
+ * What a workflow that posted one movement tells its caller.
+ *
+ * Three fields, and the same three whatever the command was: which command this
+ * answers, the movement it produced, and what the shelf holds now. The ledger's
+ * internals — the predecessor movement, the quantity before, the request hash,
+ * the recorded time, the operation row's state — are how the server keeps its
+ * own promises and are of no use to a screen that has just booked in a delivery
+ * or recorded a sale.
+ *
+ * Defined once because receiving and removal genuinely answer the same shape,
+ * and two hand-written copies of one contract are two things to keep in step.
+ * It is deliberately *not* generic over the workflow: nothing in it names the
+ * movement type, the direction, or the reason, because the caller already knows
+ * what it asked for. What it does not know, and what only the server can say,
+ * is `quantityAfter`.
+ *
+ * A retry of the same command returns this same body, with the same
+ * `movementId`: replaying is answered, not re-posted.
+ */
+export const movementResultSchema = z
+  .object({
+    /** Echoed back so a client can match a response to the command it retried. */
+    operationId: idSchema,
+    /** The movement this command produced. Server-generated, and permanent. */
+    movementId: idSchema,
+    /** Quantity on hand for that (variant, location) after the movement. */
+    quantityAfter: quantitySchema,
+  })
+  .strict();
+
+export type MovementResult = z.infer<typeof movementResultSchema>;
 
 /**
  * True when the date part of an ISO timestamp names a day that exists.

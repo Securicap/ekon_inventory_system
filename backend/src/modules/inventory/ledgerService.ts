@@ -167,6 +167,11 @@ export interface LedgerService {
 const REQUIRED_DELTA_SIGN: Readonly<Record<PostableMovementType, 'positive' | 'negative' | 'any'>> =
   {
     RECEIPT: 'positive',
+    // Stock left through ordinary operations. The workflow states a positive
+    // quantity and derives the sign; by the time a command reaches here the
+    // delta is negative, and a positive one would be a receipt wearing an
+    // issue's name.
+    ISSUE: 'negative',
     ADJUSTMENT_IN: 'positive',
     ADJUSTMENT_OUT: 'negative',
     // A count reconciles to what is physically on the shelf, which can be more
@@ -474,8 +479,10 @@ function validateCommand(command: PostMovementCommand): void {
     }
   }
 
-  // An adjustment is a human overriding the ledger's own arithmetic, so it says
-  // why (INV-11). A blank reason is a missing reason.
+  // An adjustment is a human overriding the ledger's own arithmetic, and an
+  // issue is stock leaving for a reason that *is* the business fact — sold,
+  // broken, and consumed are three different things. Both say why (INV-11). A
+  // blank reason is a missing reason.
   if (REASON_REQUIRED_MOVEMENT_TYPES.includes(movementType.data)) {
     if (command.reasonCode === null || command.reasonCode.trim().length === 0) {
       details.push({

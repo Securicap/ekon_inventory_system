@@ -7,6 +7,7 @@ import {
   migrateUp,
   migrationStatus,
 } from '../../src/platform/db/migrator.js';
+import { DEFAULT_ROLE_CAPABILITIES, ROLES } from '@ekon/shared';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
 
 /**
@@ -359,10 +360,11 @@ describe('migration 0007 on a clean database', () => {
     await db.drop();
   });
 
-  it('reports 0007 as the head migration, with every migration applied and unmodified', async () => {
+  it('reports 0007 as applied and unmodified, along with every other migration', async () => {
     const status = await migrationStatus(db.pool);
-    expect(status.at(-1)).toMatchObject({
-      version: '0007',
+    // Found by version rather than taken from the end: later migrations have
+    // landed since, and this suite is about 0007 rather than about head.
+    expect(status.find((row) => row.version === '0007')).toMatchObject({
       filename: M0007,
       applied: true,
       checksumMatches: true,
@@ -382,10 +384,19 @@ describe('migration 0007 on a clean database', () => {
   });
 
   it('seeds the role-capability table and nothing else', async () => {
+    // Counted from the shared mapping rather than written out: 0007 opened the
+    // table and later migrations grant into it, so a fixed number here would
+    // become wrong every time the authorization model legitimately changed.
+    // That the two sides agree grant for grant is asserted in
+    // `identityConstraints.test.ts`.
     const { rows } = await db.pool.query<{ count: number }>(
       `SELECT count(*) FROM role_capabilities`,
     );
-    expect(rows[0]?.count).toBe(35);
+    const expected = ROLES.reduce(
+      (total, role) => total + (DEFAULT_ROLE_CAPABILITIES[role] ?? []).length,
+      0,
+    );
+    expect(rows[0]?.count).toBe(expected);
 
     const { rows: sessions } = await db.pool.query<{ count: number }>(
       `SELECT count(*) FROM sessions`,

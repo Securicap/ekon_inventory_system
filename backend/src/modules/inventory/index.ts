@@ -4,6 +4,7 @@ import type { DatabasePool } from '../../platform/db/pool.js';
 import type { CatalogService } from '../catalog/index.js';
 import { createLedgerService, type LedgerService } from './ledgerService.js';
 import { createReceivingService, type ReceivingService } from './receivingService.js';
+import { createRemovalService, type RemovalService } from './removalService.js';
 import { registerInventoryRoutes } from './routes.js';
 import { createInventoryService, type InventoryService } from './service.js';
 
@@ -26,14 +27,20 @@ import { createInventoryService, type InventoryService } from './service.js';
 export function registerInventory(
   app: FastifyInstance,
   deps: { pool: DatabasePool; clock: Clock; catalog: CatalogService },
-): { inventory: InventoryService; ledger: LedgerService; receiving: ReceivingService } {
+): {
+  inventory: InventoryService;
+  ledger: LedgerService;
+  receiving: ReceivingService;
+  removal: RemovalService;
+} {
   const inventory = createInventoryService({ pool: deps.pool, catalog: deps.catalog });
   const ledger = createLedgerService({ pool: deps.pool, clock: deps.clock });
   const receiving = createReceivingService({ pool: deps.pool, ledger, catalog: deps.catalog });
+  const removal = createRemovalService({ pool: deps.pool, ledger, catalog: deps.catalog });
 
-  registerInventoryRoutes(app, { inventory, receiving });
+  registerInventoryRoutes(app, { inventory, receiving, removal });
 
-  return { inventory, ledger, receiving };
+  return { inventory, ledger, receiving, removal };
 }
 
 export { createInventoryService } from './service.js';
@@ -56,5 +63,11 @@ export type {
   ReceivingServiceDeps,
 } from './receivingService.js';
 
+export { createRemovalService } from './removalService.js';
+export type { RemovalService, RemovalServiceDeps, RemoveStockCommand } from './removalService.js';
+
 /** The `operations.operation_type` a receiving command claims its id under. */
 export { RECEIVING_OPERATION_TYPE } from './domain/receivingRequestHash.js';
+
+/** The `operations.operation_type` a removal command claims its id under. */
+export { REMOVAL_OPERATION_TYPE } from './domain/removalRequestHash.js';

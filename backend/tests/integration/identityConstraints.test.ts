@@ -401,7 +401,7 @@ describe('role capabilities', () => {
     expect(await seededMapping()).toEqual(expected);
   });
 
-  it('grants an employee exactly the three capabilities the counter job needs', async () => {
+  it('grants an employee exactly the four capabilities the counter job needs', async () => {
     const { rows } = await db.pool.query<{ capability: string }>(
       `SELECT capability FROM role_capabilities WHERE role = 'EMPLOYEE' ORDER BY capability`,
     );
@@ -409,6 +409,7 @@ describe('role capabilities', () => {
       'catalog.read',
       'inventory.read',
       'inventory.receive',
+      'inventory.remove',
     ]);
   });
 

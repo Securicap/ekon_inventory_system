@@ -144,7 +144,12 @@ _Enforcement:_ `integer` columns, and `scripts/check-conventions.mjs` rejects
 ## INV-11 — Every movement is fully attributable
 
 `user_id`, `operation_id`, `occurred_at`, and `recorded_at` are all `NOT NULL`.
-`reason_code` is required for adjustments.
+`reason_code` is required for adjustments **and for issues** — an adjustment
+because the number changed without the stock moving, so the reason is the only
+account of what happened; an issue because "stock left" is not yet a fact
+anybody can act on, and sold, broken, and consumed internally are three
+different things. A receipt carries its reason in its type, a count in the
+count, and a reversal in the movement it reverses.
 
 `occurred_at` is business time — when the stock physically moved — and is stated
 by the caller. `recorded_at` is server time — when the posting engine recorded
@@ -163,9 +168,13 @@ about stock. Request metadata belongs in audit and security logging. See ADR 9,
 which supersedes that part of ADR 6.
 
 _Enforcement:_ `NOT NULL` constraints plus
-`CHECK (movement_type NOT IN ('ADJUSTMENT_IN','ADJUSTMENT_OUT') OR reason_code IS NOT NULL)`
-(0005). `user_id` is `NOT NULL` but carries no foreign key until identity
-exists; a key pointing at a placeholder actor would be worse than none.
+`CHECK (movement_type NOT IN ('ISSUE','ADJUSTMENT_IN','ADJUSTMENT_OUT') OR reason_code IS NOT NULL)`
+— `inventory_movements_reason_required` (0008, replacing 0005's adjustment-only
+constraint of the same shape). The list mirrors
+`REASON_REQUIRED_MOVEMENT_TYPES` in `@ekon/shared`, and an integration test
+compares the two. `user_id` is `NOT NULL` but carries no foreign key until
+identity exists; a key pointing at a placeholder actor would be worse than
+none.
 
 ## INV-12 — Rows with history are deactivated, never deleted
 
