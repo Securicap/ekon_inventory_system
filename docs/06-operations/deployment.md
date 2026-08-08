@@ -17,22 +17,34 @@ Following this document gives the business exactly this, and nothing more:
   application;
 - **capability authorization** — every API route declares what it requires, and
   a route that declares nothing refuses to start;
+- **the product catalog** — an owner or manager holding `catalog.write` creates
+  products and their variants from the browser;
 - **receiving stock**;
 - **current stock, by location**;
 - **removing stock**;
 - **retry-safe posting** — a receipt or a removal retried after a dropped
   connection posts once.
 
-There are no adjustments, no counts, no transfers, no suppliers or purchasing,
-no sales, no reports, and no audit log. Accounts cannot yet be listed, edited,
-deactivated, or given a new password, and there is no password reset.
+### The launch invariant
 
-One gap matters for the first deploy: **there is no screen for creating a
-product.** The catalog screen reads. Products are created through
-`POST /api/catalog/products` (`catalog.write`), so the shop's first product is
-created by hand against the API — see
-[backend/src/modules/catalog/README.md](../../backend/src/modules/catalog/README.md).
-An employee cannot receive stock until at least one stockable variant exists.
+> After the bootstrap, the owner can sign in, create employee accounts, and
+> create the first product; an employee can then receive it, see its stock and
+> location, remove it, and sign out — **all through supported application
+> workflows, with no API call, database statement, or shell command anywhere in
+> the sequence.**
+
+That sentence is what "ready to deploy" means here, and the first-deploy
+procedure below is it, performed once against a real environment. The handoff in
+its middle — a product created in the browser becoming something an employee can
+book in — is asserted in
+`frontend/tests/catalog/outcomes.test.tsx`.
+
+There are no adjustments, no counts, no transfers, no suppliers or purchasing,
+no sales, no reports, and no audit log. Products cannot yet be edited, renamed,
+or deactivated, and a variant cannot be added to a product that already exists;
+a product created wrongly is replaced by creating the right one. Accounts cannot
+be listed, edited, deactivated, or given a new password, and there is no
+password reset.
 
 ## Shape
 
@@ -94,7 +106,9 @@ needed.
 
 ## First deploy
 
-Do these in order. Steps 3 and 7 are the two that only happen once.
+Do these in order. Step 3 is the only one that can never be repeated; steps 7
+and 8 are done once here and afterwards whenever the shop hires somebody or
+stocks something new.
 
 ### 1. Configure the environment
 
@@ -178,24 +192,45 @@ the keyboard is the person signed in.
 Creating an account does not sign anybody in and does not touch the owner's own
 session.
 
-### 8. Verify an employee can do the work
+### 8. Create the first product
+
+Still signed in as the owner, on the products screen: **New product**. A name is
+enough — a product sold one way is a single default variant, and that is what
+"type a name and create" produces. A product sold in several sizes gets one
+variant per size, each with its own attributes (`gwosè: 5 mamit`).
+
+The catalog assigns the SKU. It is shown on the confirmation and is the
+identifier to put on the shelf label; nobody chooses it, and it cannot be
+changed afterwards.
+
+A product cannot yet be edited, renamed, or deactivated, so this is worth doing
+carefully with whoever knows the stock. A wrong one is replaced by creating the
+right one and leaving the wrong one unused.
+
+An employee cannot receive anything until at least one product exists, which is
+why this comes before the next step and not after it.
+
+### 9. Verify an employee can do the work
 
 The deployment is not finished until somebody who is not the owner has done the
-whole loop. If no product exists yet, the owner creates one first through
-`POST /api/catalog/products` — see [Status](#status).
+whole loop, on the hardware the shop will actually use. Signed in as an
+employee:
 
-Signed in as an employee, on the hardware the shop will actually use:
-
-1. read the catalog;
+1. read the catalog, and find the product created in step 8;
 2. receive a small quantity into a location;
 3. see that quantity in the current-stock view;
 4. remove some of it;
 5. see the balance fall by what was removed;
 6. sign out.
 
-If all six work, the business can open. If step 2 or 4 fails, do not hand the
-system over — the shop would take stock in on paper and nothing would be
+If all six work, the business can open — the launch invariant at the top of this
+document has been performed end to end. If step 2 or 4 fails, do not hand the
+system over: the shop would take stock in on paper and nothing would be
 recorded.
+
+The employee should also see **no** product form and no new-account entry —
+`catalog.write` and `identity.manage` are not theirs. If they do, the account
+was created with the wrong role.
 
 ## Environment variables
 

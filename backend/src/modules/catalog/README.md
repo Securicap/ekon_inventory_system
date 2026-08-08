@@ -137,6 +137,23 @@ Neither route reads the actor, because creating a product records no `user_id`
 yet. The workflows that do will take it from `requireActor(request)`, never from
 the request body.
 
+## In the browser
+
+`POST /api/catalog/products` is reached from the products screen, by somebody
+holding `catalog.write` — see
+[frontend/README.md](../../../../frontend/README.md). Nothing about this module
+changed to make that possible: the frontend builds its request with this
+module's own `createProductRequestSchema`, which is `.strict()` and therefore
+refuses a client-supplied `id`, `variantSignature`, or `sku` before the request
+leaves the browser as well as after it arrives.
+
+The route has **no operation id and writes no `operations` row**, and the
+frontend sends none. That is the same decision account creation made: the header
+exists so a retried _movement_ posts once, and claiming idempotency here would
+mean a genuine second product was answered with the first one. There is no
+uniqueness on a product name either, so an automatic retry would be an automatic
+duplicate — which is why the browser never retries this on its own.
+
 ## Not yet
 
 Deactivation (products/variants carry `is_active` but nothing sets it to false
