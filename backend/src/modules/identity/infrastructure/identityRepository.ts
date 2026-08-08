@@ -7,10 +7,11 @@ import type { DatabaseClient, DatabasePool } from '../../../platform/db/pool.js'
  * module, and no other module reaches these tables — `users`, `sessions`, and
  * `role_capabilities` are identity's alone.
  *
- * Only what the initial-owner bootstrap and the authentication routes need
- * exists here. There is still no generic user repository, no list, no update,
- * no delete, and no way to read a password hash except on the login path: user
- * management arrives in a later PR and will add exactly the queries it uses.
+ * Only what the initial-owner bootstrap, the authentication routes, and the
+ * account-creation workflow need exists here. There is still no generic user
+ * repository, no list, no update, no delete, and no way to read a password hash
+ * except on the login path — account creation added no query of its own, since
+ * inserting a user is something this file already knew how to do.
  */
 
 type Queryable = DatabasePool | DatabaseClient;
@@ -48,8 +49,20 @@ export function isUniqueViolation(error: unknown, constraint: string): boolean {
   return candidate.code === UNIQUE_VIOLATION && candidate.constraint === constraint;
 }
 
-export async function insertUser(tx: DatabaseClient, params: InsertUserParams): Promise<void> {
-  await tx.query(
+/**
+ * Writes one user row.
+ *
+ * Takes a `Queryable` rather than a transaction client because the two callers
+ * genuinely differ. The bootstrap runs inside a transaction, under a table
+ * lock, because "at most one owner" is a check followed by an insert and the
+ * two must not be separable. Ordinary account creation has no such invariant:
+ * the only rule spanning rows is one username per person, and the UNIQUE
+ * constraint enforces that on the statement itself — so it is one INSERT
+ * against the pool, and wrapping it in a transaction would be ceremony that
+ * suggests an atomicity requirement nobody has.
+ */
+export async function insertUser(db: Queryable, params: InsertUserParams): Promise<void> {
+  await db.query(
     `INSERT INTO users (id, username, display_name, password_hash, role, is_active, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [

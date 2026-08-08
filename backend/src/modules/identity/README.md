@@ -85,8 +85,11 @@ otherwise have picked. Passwords are never trimmed; a leading space is a
 character the person chose.
 
 There is no PIN, no email address, no password hint, no security question, and
-no recovery token. Password reset is an authenticated workflow for a later PR,
-performed by someone holding `identity.manage`.
+no recovery token. A password is set once, when the account is created — by the
+owner running the bootstrap command, or by whoever creates the account through
+the workflow below. Changing one, and resetting a forgotten one, are
+authenticated workflows for a later PR, performed by someone holding
+`identity.manage`.
 
 ## Creating the first owner
 
@@ -103,9 +106,10 @@ npm run identity:create-owner
 It creates exactly one active `OWNER`, and refuses if any required value is
 missing or invalid, if the username is taken, or if an active owner already
 exists. There is no force flag and it cannot create a second account: everyone
-after the first owner is created through the signed-in identity workflow, by
-someone holding `identity.manage`. No user and no password is seeded by any
-migration, so no installation ships with a default credential.
+after the first owner is created through
+[the signed-in workflow below](#creating-everybody-else), by someone holding
+`identity.manage`. No user and no password is seeded by any migration, so no
+installation ships with a default credential.
 
 **Handling the password.** The value is visible in the environment of the
 process that runs the command and, depending on the shell, in shell history.
@@ -121,15 +125,92 @@ Keep it out of both:
 Command-line arguments are deliberately not supported: `ps` shows every
 process's arguments to every user on the machine.
 
+## Creating everybody else
+
+`POST /api/identity/users`, requiring **`identity.manage`**. This is how a shop
+gives an employee an account, and it is the only way after the first owner.
+
+```jsonc
+// request
+{
+  "username": "nadege.l",
+  "displayName": "Nadege Louis",
+  "password": "<chosen with the person, told to them>",
+  "role": "EMPLOYEE",
+}
+```
+
+`201` with the created account: id, username, display name, role, `isActive`,
+and `createdAt`. **No password hash, no capability list, and no session.**
+
+**Four fields, and everything else is the server's.** The request schema is
+strict, so a body carrying an `id`, a `passwordHash`, an `isActive`, a
+timestamp, or a `capabilities` array is a `400` naming the field rather than a
+value quietly dropped. There is no `capabilities` field at all and there will
+not be one: capabilities come from the role through `role_capabilities`,
+resolved on every request, and a request that could name them would be a request
+that grants itself permissions.
+
+**Creating an account does not sign anybody in.** No session row is written and
+nothing in the reply could be presented as the new user; they sign in themselves
+through `POST /api/auth/login`, with the password they were given. The caller's
+own session is untouched, and no cookie is set on the response.
+
+**The rules are the ones the system already had.** The username is normalized
+and validated by the same `usernameSchema` the login route parses, so an account
+is created under exactly the name it will sign in with — `" Nadege.L "` and
+`nadege.l` are one account, and a second spelling of an existing name is a
+conflict rather than a second person. The password is length-checked by the
+shared bounds, never trimmed, and hashed by the same Argon2id `hashPassword`
+that the bootstrap uses. The role is the closed set from `@ekon/shared`.
+
+| Situation                                     | Status | Code                |
+| --------------------------------------------- | ------ | ------------------- |
+| Bad username, display name, password, or role | `400`  | `VALIDATION_FAILED` |
+| A field the server owns, or any unknown field | `400`  | `VALIDATION_FAILED` |
+| No session, or one that no longer resolves    | `401`  | `UNAUTHENTICATED`   |
+| Signed in without `identity.manage`           | `403`  | `FORBIDDEN`         |
+| The username is already taken                 | `409`  | `CONFLICT`          |
+
+**Any role may be created, and no rule restricts which.** That is safe for a
+structural reason rather than an optimistic one: every role holding
+`identity.manage` — `OWNER` and `SUPER_ADMIN` — already holds _every_
+capability, so no account a creator can make can do something they cannot.
+Account creation is therefore not an escalation path. A unit test asserts
+exactly that invariant, and it fails the day `identity.manage` is granted to a
+role that does not hold everything — which is the day this route would need such
+a rule, and the right moment to decide on one.
+
+**No operation id, and no `operations` row.** That header exists so a retried
+_movement_ posts once. A repeated account creation is a duplicate username,
+which the `UNIQUE` constraint refuses on its own, and claiming idempotency here
+would mean a genuine second attempt was answered with somebody else's account.
+
+**One statement, no transaction, and no "is this name taken?" read first.** The
+bootstrap takes a table lock because "at most one active owner" spans rows no
+constraint connects; one username per person is a single-column `UNIQUE`, so the
+insert is allowed to fail and the failure is translated to a `409`. A pre-check
+would be a second answer to the same question, and a stale one: the gap between
+reading and writing is exactly where the duplicate would be created.
+
+Hashing happens **before** the insert and outside anything holding a row.
+Argon2id is slow by design, and the one moment in this workflow that touches no
+rows is the right place to spend it.
+
+There is **no listing, no editing, no role change, no deactivation, and no
+password reset** — not here, and not anywhere. Each is a separate authority over
+somebody's access and each is its own decision.
+
 ## Signing in
 
-Three routes, and they are the module's whole HTTP surface:
+Four routes, and they are the module's whole HTTP surface:
 
-| Route                   | Access        | Answers                                          |
-| ----------------------- | ------------- | ------------------------------------------------ |
-| `POST /api/auth/login`  | public        | `200` with the user, and sets the session cookie |
-| `POST /api/auth/logout` | public        | `204`, always                                    |
-| `GET /api/auth/me`      | authenticated | `200` with the current user, or `401`            |
+| Route                      | Access            | Answers                                          |
+| -------------------------- | ----------------- | ------------------------------------------------ |
+| `POST /api/auth/login`     | public            | `200` with the user, and sets the session cookie |
+| `POST /api/auth/logout`    | public            | `204`, always                                    |
+| `GET /api/auth/me`         | authenticated     | `200` with the current user, or `401`            |
+| `POST /api/identity/users` | `identity.manage` | `201` with the created account                   |
 
 `login` takes a username and a password and **nothing else** — no user id, no
 role, no capability list, no session lifetime, no cookie option. The request
@@ -353,10 +434,12 @@ clear it. It revokes the presented session when there is one to revoke, answers
 
 ## In the browser
 
-There is a login screen. The data model, the password utility, the owner
-bootstrap, authentication, enforcement, **and a usable browser session** exist:
-somebody can open the application, sign in, use the screens that are built, and
-sign out.
+There is a login screen, and one screen for creating an account. The data model,
+the password utility, the owner bootstrap, authentication, enforcement, **and a
+usable browser session** exist: somebody can open the application, sign in, use
+the screens that are built, and sign out — and an owner can give an employee an
+account without anybody touching the API by hand, which is what makes a shop's
+first day possible.
 
 The frontend's part is deliberately small, because the server holds everything
 that matters:
@@ -384,8 +467,13 @@ See [frontend/README.md](../../../../frontend/README.md).
 
 ## Still missing
 
-- no user-management API or UI, no password change, no password-reset workflow,
-  no session listing, and no "sign out everywhere";
+- **account creation is the whole of user management.** There is no listing, no
+  search, no editing, no role change, no deactivation, no password change, no
+  password-reset workflow, no session listing, and no "sign out everywhere".
+  Each is a separate authority over somebody's access, and none of them blocks
+  running the shop: an account created with the wrong role is replaced by
+  creating the right one, and the wrong one is left unused until deactivation
+  lands;
 - **no rate limiting**, account lockout, or CAPTCHA on the login route. The
   defence against guessing is the credential itself — ten characters minimum,
   Argon2id, no PIN (ADR 10) — and rate limiting is infrastructure that should be
