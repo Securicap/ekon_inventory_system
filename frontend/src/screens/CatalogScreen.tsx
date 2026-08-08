@@ -1,11 +1,17 @@
-import type { ListProductsResponse } from '@ekon/shared';
+import { useState } from 'react';
+import type { Product } from '@ekon/shared';
+import { hasCapability } from '../auth/capabilities.js';
+import { useAuthenticatedUser } from '../auth/useAuth.js';
 import { useProtectedQuery } from '../auth/useProtectedQuery.js';
 import { ErrorNotice } from '../components/ErrorNotice.js';
+import { PRIMARY_BUTTON } from '../components/styles.js';
 import { useTranslator } from '../i18n/index.js';
-import { api } from '../lib/api.js';
+import { catalogProductsQueryKey, getCatalogProducts } from '../lib/catalogQueries.js';
+import { NewProductForm } from './NewProductForm.js';
 
 /**
- * The catalog, read-only.
+ * The catalog: what the shop sells, and — for somebody who may write it — the
+ * form that puts the first item in it.
  *
  * `GET /api/catalog/products` requires `catalog.read`, and the nav entry that
  * leads here is shown for the same capability — but the two are not the same
@@ -14,19 +20,74 @@ import { api } from '../lib/api.js';
  * cannot happen. Somebody's role can change between the page loading and the
  * request being made.
  *
- * Creating a product needs `catalog.write` and a form, and neither is this PR.
+ * Creation lives here rather than on a screen of its own because the list is
+ * the confirmation: a product created is a product visible, one line below the
+ * form that made it. It is offered on `catalog.write` — a different permission
+ * from the one that opens this screen, and somebody may hold either without the
+ * other. The server checks it again on the request, which is the boundary that
+ * matters; hiding a form nobody may submit is a usability property and that is
+ * all.
  */
 export function CatalogScreen() {
   const t = useTranslator();
+  const user = useAuthenticatedUser();
+
+  const [creating, setCreating] = useState(false);
+  /** The product the last submission created. Only ever set from a response. */
+  const [created, setCreated] = useState<Product | null>(null);
 
   const products = useProtectedQuery({
-    queryKey: ['catalog', 'products'],
-    queryFn: ({ signal }) => api.get<ListProductsResponse>('/api/catalog/products', signal),
+    queryKey: catalogProductsQueryKey,
+    queryFn: ({ signal }) => getCatalogProducts(signal),
   });
+
+  const mayCreate = hasCapability(user, 'catalog.write');
 
   return (
     <section className="flex flex-col gap-4">
-      <h2 className="text-xl font-medium">{t('catalog.title')}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-xl font-medium">{t('catalog.title')}</h2>
+        {mayCreate && !creating && (
+          <button
+            type="button"
+            className={PRIMARY_BUTTON}
+            onClick={() => {
+              setCreated(null);
+              setCreating(true);
+            }}
+          >
+            {t('catalog.newProduct')}
+          </button>
+        )}
+      </div>
+
+      {/* The confirmation outlives the form: it closes on success, and what is
+          left on screen is the sentence naming the product and the list it now
+          appears in. The SKUs are here because they are what goes on the shelf
+          label, and the server is the only thing that could have chosen them. */}
+      {created && (
+        <div
+          role="status"
+          className="flex flex-col items-start gap-1 rounded-md border border-green-700 bg-green-50 px-4 py-3 text-green-900"
+        >
+          <p className="font-medium">{t('catalog.created', { name: created.name })}</p>
+          <p className="tabular">
+            {t('catalog.createdHint', {
+              skus: created.variants.map((variant) => variant.sku).join(', '),
+            })}
+          </p>
+        </div>
+      )}
+
+      {creating && (
+        <NewProductForm
+          onCreated={(product) => {
+            setCreated(product);
+            setCreating(false);
+          }}
+          onCancel={() => setCreating(false)}
+        />
+      )}
 
       {products.isPending && <p className="text-slate-600">{t('status.loading')}</p>}
 

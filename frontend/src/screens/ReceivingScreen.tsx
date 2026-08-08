@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   MAX_MOVEMENT_QUANTITY,
   type ListInventoryLocationsResponse,
-  type ListProductsResponse,
   type ReceiveStockRequest,
   type ReceiveStockResponse,
 } from '@ekon/shared';
@@ -14,6 +13,7 @@ import { PRIMARY_BUTTON, SECONDARY_BUTTON, TEXT_INPUT } from '../components/styl
 import { useTranslator } from '../i18n/index.js';
 import { api, ApiError, NetworkError } from '../lib/api.js';
 import { localDateTimeToIso, toLocalDateTimeInputValue } from '../lib/businessTime.js';
+import { catalogProductsQueryKey, getCatalogProducts } from '../lib/catalogQueries.js';
 import { inventoryBalancesQueryKey } from '../lib/inventoryQueries.js';
 import { newOperationId } from '../lib/operations.js';
 import {
@@ -70,8 +70,8 @@ export function ReceivingScreen() {
   const queryClient = useQueryClient();
 
   const products = useProtectedQuery({
-    queryKey: ['catalog', 'products'],
-    queryFn: ({ signal }) => api.get<ListProductsResponse>('/api/catalog/products', signal),
+    queryKey: catalogProductsQueryKey,
+    queryFn: ({ signal }) => getCatalogProducts(signal),
   });
 
   const locations = useProtectedQuery({
