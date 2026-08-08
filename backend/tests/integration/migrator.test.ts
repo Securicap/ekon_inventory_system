@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  assertSchemaVersion,
   currentSchemaVersion,
   loadMigrations,
   migrateUp,
@@ -49,6 +50,22 @@ describe('migration runner', () => {
       `SELECT extname FROM pg_extension WHERE extname IN ('citext', 'pgcrypto')`,
     );
     expect(rows.map((r) => r.extname).sort()).toEqual(['citext', 'pgcrypto']);
+  });
+
+  /**
+   * The other half of the production pin. `loadConfig` guarantees a production
+   * deploy supplies `EXPECTED_SCHEMA_VERSION` at all
+   * (`tests/unit/config.test.ts`); this is what `main.ts` does with the value
+   * once it has one, and the reason the pin is worth requiring.
+   */
+  it('accepts a pin matching the version the database is at', async () => {
+    const head = (await loadMigrations()).at(-1)?.version;
+    if (!head) throw new Error('No migrations found; cannot determine the head version');
+    await expect(assertSchemaVersion(db.pool, head)).resolves.toBeUndefined();
+  });
+
+  it('refuses a pin the database does not match', async () => {
+    await expect(assertSchemaVersion(db.pool, '9998')).rejects.toThrow(/Schema version mismatch/);
   });
 
   it('refuses to run when an applied migration has been edited', async () => {
