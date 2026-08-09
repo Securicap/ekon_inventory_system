@@ -1,5 +1,5 @@
+import { Brand } from '../../components/Brand.js';
 import type { NavigationGroup, View } from '../navigation.js';
-import { Brand } from './Brand.js';
 import { NavigationList } from './NavigationList.js';
 import { UserArea } from './UserArea.js';
 

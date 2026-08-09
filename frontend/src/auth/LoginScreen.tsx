@@ -1,7 +1,15 @@
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { loginRequestSchema } from '@ekon/shared';
-import { PRIMARY_BUTTON, TEXT_INPUT } from '../components/styles.js';
+import { Brand } from '../components/Brand.js';
+import {
+  FIELD_ERROR,
+  FIELD_HINT,
+  FIELD_LABEL,
+  PRIMARY_BUTTON,
+  PRIMARY_BUTTON_BUSY,
+  TEXT_INPUT,
+} from '../components/styles.js';
 import { useTranslator, type MessageKey } from '../i18n/index.js';
 import { ApiError } from '../lib/api.js';
 import { messageKeyForError } from '../lib/errorMessages.js';
@@ -85,97 +93,127 @@ export function LoginScreen({ sessionEnded }: { sessionEnded: boolean }) {
     signIn.mutate(parsed.data);
   }
 
+  // The password field is emptied by a refusal. Saying so under the field is
+  // the difference between "the application lost what I typed" and "it cleared
+  // it so I would not send the same thing again by reflex".
+  const passwordDescribedBy =
+    [
+      fieldErrors.password ? 'login-password-error' : null,
+      signIn.isError ? 'login-password-cleared' : null,
+    ]
+      .filter((id) => id !== null)
+      .join(' ') || undefined;
+
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-6 p-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">{t('app.name')}</h1>
-        <p className="text-slate-600">{t('app.tagline')}</p>
-      </div>
+    <main className="flex flex-1 items-center justify-center p-4 md:p-6 lg:p-8">
+      <div className="flex w-full max-w-100 flex-col gap-5">
+        <Brand variant="hero" level={1} />
 
-      {sessionEnded && (
-        <p
-          role="status"
-          className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-slate-900"
-        >
-          {t('error.sessionExpired')}
-        </p>
-      )}
-
-      <form
-        onSubmit={handleSubmit}
-        noValidate
-        className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-6"
-      >
-        <h2 className="text-lg font-medium">{t('auth.signInHeading')}</h2>
-
-        {signIn.isError && (
-          <div
-            ref={summaryRef}
-            tabIndex={-1}
-            role="alert"
-            className="rounded-md border border-red-700 bg-red-50 px-4 py-3 text-red-900"
+        {sessionEnded && (
+          <p
+            role="status"
+            className="rounded-md border border-warning bg-warning-soft px-3.5 py-3 text-[15px] text-warning-ink"
           >
-            {t(signInFailureMessageKey(signIn.error))}
-          </div>
+            {t('error.sessionExpired')}
+          </p>
         )}
 
-        <div className="flex flex-col gap-1">
-          <label htmlFor="login-username" className="font-medium">
-            {t('auth.username')}
-          </label>
-          <input
-            id="login-username"
-            ref={usernameRef}
-            name="username"
-            type="text"
-            /* The browser's own credential manager. Nothing this application
-               writes; it never stores a credential itself. */
-            autoComplete="username"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            required
-            className={TEXT_INPUT}
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            aria-invalid={fieldErrors.username ? true : undefined}
-            aria-describedby={fieldErrors.username ? 'login-username-error' : undefined}
-          />
-          {fieldErrors.username && (
-            <p id="login-username-error" className="text-red-800">
-              {t(fieldErrors.username)}
-            </p>
-          )}
-        </div>
+        <form
+          onSubmit={handleSubmit}
+          noValidate
+          className="flex flex-col gap-4 rounded-lg border border-line bg-surface p-6 shadow-panel"
+        >
+          <h2 className="text-lg font-semibold text-ink">{t('auth.signInHeading')}</h2>
 
-        <div className="flex flex-col gap-1">
-          <label htmlFor="login-password" className="font-medium">
-            {t('auth.password')}
-          </label>
-          <input
-            id="login-password"
-            ref={passwordRef}
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            className={TEXT_INPUT}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            aria-invalid={fieldErrors.password ? true : undefined}
-            aria-describedby={fieldErrors.password ? 'login-password-error' : undefined}
-          />
-          {fieldErrors.password && (
-            <p id="login-password-error" className="text-red-800">
-              {t(fieldErrors.password)}
-            </p>
+          {signIn.isError && (
+            <div
+              ref={summaryRef}
+              tabIndex={-1}
+              role="alert"
+              /* Focus is moved here programmatically, which `focus-visible`
+                 does not always cover — so this ring is on plain `:focus`. */
+              className="rounded-md border border-danger bg-danger-soft px-3.5 py-3 text-[15px] font-semibold text-danger-ink focus:outline-2 focus:outline-offset-2 focus:outline-accent-focus"
+            >
+              {t(signInFailureMessageKey(signIn.error))}
+            </div>
           )}
-        </div>
 
-        <button type="submit" className={PRIMARY_BUTTON} disabled={signIn.isPending}>
-          {signIn.isPending ? t('auth.signingIn') : t('auth.signIn')}
-        </button>
-      </form>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="login-username" className={FIELD_LABEL}>
+              {t('auth.username')}
+            </label>
+            <input
+              id="login-username"
+              ref={usernameRef}
+              name="username"
+              type="text"
+              /* The browser's own credential manager. Nothing this application
+                 writes; it never stores a credential itself. */
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              required
+              className={TEXT_INPUT}
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              aria-invalid={fieldErrors.username ? true : undefined}
+              aria-describedby={fieldErrors.username ? 'login-username-error' : undefined}
+            />
+            {fieldErrors.username && (
+              <p id="login-username-error" className={FIELD_ERROR}>
+                {t(fieldErrors.username)}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="login-password" className={FIELD_LABEL}>
+              {t('auth.password')}
+            </label>
+            <input
+              id="login-password"
+              ref={passwordRef}
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              className={TEXT_INPUT}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              aria-invalid={fieldErrors.password ? true : undefined}
+              aria-describedby={passwordDescribedBy}
+            />
+            {fieldErrors.password && (
+              <p id="login-password-error" className={FIELD_ERROR}>
+                {t(fieldErrors.password)}
+              </p>
+            )}
+            {signIn.isError && (
+              <p id="login-password-cleared" className={FIELD_HINT}>
+                {t('auth.passwordCleared')}
+              </p>
+            )}
+          </div>
+
+          <button
+            type="submit"
+            className={`${signIn.isPending ? PRIMARY_BUTTON_BUSY : PRIMARY_BUTTON} w-full`}
+            disabled={signIn.isPending}
+            aria-busy={signIn.isPending}
+          >
+            {signIn.isPending && (
+              <span
+                aria-hidden="true"
+                className="mr-2.5 inline-block size-3.5 animate-spin rounded-full border-2 border-white/45 border-t-white motion-reduce:animate-none"
+              />
+            )}
+            {signIn.isPending ? t('auth.signingIn') : t('auth.signIn')}
+          </button>
+
+          <p className={FIELD_HINT}>{t('auth.noSelfService')}</p>
+        </form>
+      </div>
     </main>
   );
 }

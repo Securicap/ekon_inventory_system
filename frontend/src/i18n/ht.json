@@ -36,6 +36,8 @@
   "auth.passwordRequired": "Antre modpas ou.",
   "auth.passwordTooShort": "Modpas la twò kout.",
   "auth.invalidCredentials": "Non itilizatè oswa modpas la pa bon.",
+  "auth.passwordCleared": "Chan an vid apre yon refi: menm sa a p ap voye ankò san reflechi.",
+  "auth.noSelfService": "Se pwopriyetè a ki kreye kont ou. Pa gen enskripsyon ni chanjman modpas isit la.",
   "auth.signOut": "Dekonekte",
   "auth.signingOut": "N ap dekonekte…",
   "auth.signOutFailed": "Nou pa rive dekonekte ou. Eseye ankò.",

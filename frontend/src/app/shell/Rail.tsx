@@ -1,7 +1,7 @@
 import { useAuthenticatedUser } from '../../auth/useAuth.js';
+import { Brand } from '../../components/Brand.js';
 import { useTranslator } from '../../i18n/index.js';
 import type { NavigationItem, View } from '../navigation.js';
-import { Brand } from './Brand.js';
 
 const FOCUS =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-focus';
