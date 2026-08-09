@@ -2,10 +2,23 @@
 
 ## Status
 
-Nothing is deployed yet, and no hosting provider has been chosen. What changed
-is that there is now something worth deploying: the operating loop a shop needs
-on its first day is closed end to end, so a deployment would put a real database
-behind an application people can actually work in.
+Ekon is deployed to **staging**: the application runs on Northflank, and its
+PostgreSQL is hosted by Supabase. What made that worth doing is that the
+operating loop a shop needs on its first day is closed end to end, so the
+deployment put a real database behind an application people can actually work
+in.
+
+The launch invariant below has been exercised successfully, by hand, against
+that hosted staging environment. Provider-specific setup — the service, its
+environment variables, the readiness probe — lives in
+[northflank-supabase.md](northflank-supabase.md); this document stays
+provider-neutral.
+
+**Production hosting is not finalized.** Staging runs on Northflank's free
+Developer Sandbox, which is what proved the hosted workflow and not an approved
+permanent production environment. Where production runs, on which plan, and
+with what availability and backup commitments, is still an open operational
+decision.
 
 Following this document gives the business exactly this, and nothing more:
 
@@ -48,16 +61,22 @@ password reset.
 
 ## Shape
 
-One managed web service and one managed PostgreSQL database, in a US East
-region for latency to Haiti. Nothing runs in the shop.
+One managed web service and one managed PostgreSQL database. Nothing runs in
+the shop.
+
+Region is a latency decision for Haiti, and this document does not fix one: a US
+East region is the natural choice wherever a provider offers it. That is not
+where staging is today — the Northflank staging service runs in **US Central
+(Council Bluffs)**.
 
 The web service serves the API _and_ the built frontend from one origin, so
 there is one deploy, one certificate, no CORS, and no cookie-domain problem for
 the session cookie. There is no separate frontend host.
 
-The provider is not chosen, so this document names no platform's commands. Where
-it says "the platform builds" or "the release command", that is a setting to
-fill in wherever the service is eventually run.
+This document names no platform's commands, so it holds for whatever production
+is eventually run on. Where it says "the platform builds" or "the release
+command", that is a setting to fill in for the service in question;
+[northflank-supabase.md](northflank-supabase.md) fills them in for staging.
 
 ## Environments
 
@@ -289,9 +308,9 @@ is updated. If a migration must be undone, write a new forward migration.
 
 ## Backups
 
-**None of this is configured — the environment does not exist yet.** It is what
-provisioning must set up, because the database is the business's only record of
-its inventory:
+**None of this is configured — not on staging, and there is no production
+environment yet.** It is what provisioning must set up, because the database is
+the business's only record of its inventory:
 
 1. the provider's automated daily backup with point-in-time recovery;
 2. a weekly `pg_dump` to object storage, in a different account from the
