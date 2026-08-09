@@ -27,7 +27,7 @@ export function SignOutButton() {
   });
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-stretch gap-1">
       <button
         type="button"
         className={SECONDARY_BUTTON}
@@ -38,7 +38,7 @@ export function SignOutButton() {
       </button>
 
       {signOut.isError && (
-        <p role="alert" className="text-sm text-red-800">
+        <p role="alert" className="text-sm text-danger">
           {t('auth.signOutFailed')}
         </p>
       )}
