@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Brand } from '../components/Brand.js';
 import { ErrorNotice } from '../components/ErrorNotice.js';
 import { useTranslator } from '../i18n/index.js';
 import { LoginScreen } from './LoginScreen.js';
@@ -25,11 +26,18 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
 
   switch (state.status) {
     case 'loading':
+      // The identity is drawn here, in the place and at the size the login
+      // screen and the failure state draw it. All three are the same centred
+      // column, so resolving the session moves nothing that was already on the
+      // screen — it only fills in what comes below the mark.
       return (
-        <main className="flex flex-1 items-center justify-center p-6">
-          <p role="status" className="text-lg text-slate-600">
-            {t('app.loading')}
-          </p>
+        <main className="flex flex-1 items-center justify-center p-4 md:p-6 lg:p-8">
+          <div className="flex w-full max-w-100 flex-col gap-5">
+            <Brand variant="hero" level={1} />
+            <p role="status" className="text-lg text-ink-soft">
+              {t('app.loading')}
+            </p>
+          </div>
         </main>
       );
 
@@ -38,9 +46,11 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
       // signed in — and we do not guess. Showing the login form here would
       // invite somebody to type a password into a dropped connection.
       return (
-        <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-4 p-6">
-          <h1 className="text-2xl font-semibold text-slate-900">{t('app.name')}</h1>
-          <ErrorNotice error={state.error} onRetry={retryBootstrap} />
+        <main className="flex flex-1 items-center justify-center p-4 md:p-6 lg:p-8">
+          <div className="flex w-full max-w-100 flex-col gap-5">
+            <Brand variant="hero" level={1} />
+            <ErrorNotice error={state.error} onRetry={retryBootstrap} />
+          </div>
         </main>
       );
 

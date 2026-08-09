@@ -20,17 +20,32 @@
 const FOCUS =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-focus';
 
+const BUTTON = `inline-flex min-h-touch items-center justify-center rounded-md border py-2 ${FOCUS}`;
+
+/** Unpressable because something else must happen first: grey, and inert. */
+const DISABLED = 'disabled:border-line disabled:bg-canvas disabled:text-ink-disabled';
+
+const PRIMARY_LOOK = 'border-accent bg-accent px-[18px] text-base font-semibold text-white';
+
 /** The one action a screen is for. There is at most one per form. */
-export const PRIMARY_BUTTON =
-  `inline-flex min-h-touch items-center justify-center rounded-md border border-accent ` +
-  `bg-accent px-[18px] py-2 text-base font-semibold text-white hover:bg-accent-hover ` +
-  `disabled:border-line disabled:bg-canvas disabled:text-ink-disabled ${FOCUS}`;
+export const PRIMARY_BUTTON = `${BUTTON} ${PRIMARY_LOOK} hover:bg-accent-hover ${DISABLED}`;
+
+/**
+ * The same button while its own command is in flight.
+ *
+ * Deliberately not the disabled look. "You may not press this" and "this is
+ * working on what you pressed" are different facts, and a grey button says the
+ * first when the second is true. It keeps its colour, dims, and carries its own
+ * progress mark — so the only thing that changed is that it is busy. The
+ * disabled utilities are absent rather than overridden, because two `disabled:`
+ * rules for one property would be settled by stylesheet order.
+ */
+export const PRIMARY_BUTTON_BUSY = `${BUTTON} ${PRIMARY_LOOK} cursor-progress opacity-75`;
 
 /** Everything else that is safe to press: refresh, cancel, add a row, sign out. */
 export const SECONDARY_BUTTON =
-  `inline-flex min-h-touch items-center justify-center rounded-md border border-line-strong ` +
-  `bg-surface px-4 py-2 text-base font-medium text-ink hover:bg-fill ` +
-  `disabled:border-line disabled:bg-canvas disabled:text-ink-disabled ${FOCUS}`;
+  `${BUTTON} border-line-strong bg-surface px-4 text-base font-medium text-ink ` +
+  `hover:bg-fill ${DISABLED}`;
 
 /**
  * Recording that stock left the shop. Distinct by weight and wording as much as
@@ -38,9 +53,8 @@ export const SECONDARY_BUTTON =
  * movement, not a warning that the application is dangerous.
  */
 export const DESTRUCTIVE_BUTTON =
-  `inline-flex min-h-touch items-center justify-center rounded-md border border-danger ` +
-  `bg-danger px-[18px] py-2 text-base font-semibold text-white hover:bg-danger/90 ` +
-  `disabled:border-line disabled:bg-canvas disabled:text-ink-disabled ${FOCUS}`;
+  `${BUTTON} border-danger bg-danger px-[18px] text-base font-semibold text-white ` +
+  `hover:bg-danger/90 ${DISABLED}`;
 
 /**
  * A navigation destination, in the sidebar and in the mobile panel alike.
@@ -55,6 +69,18 @@ export const NAV_ITEM =
   `text-left text-base font-medium text-ink hover:bg-fill ` +
   `aria-[current=page]:border-accent aria-[current=page]:bg-accent-soft ` +
   `aria-[current=page]:font-semibold aria-[current=page]:text-accent-ink ${FOCUS}`;
+
+/**
+ * The three pieces of text around a field: its label, the hint under it, and
+ * the reason it was refused.
+ *
+ * A label is always visible and always a `<label>`; a placeholder is not a
+ * label and is never used as one. The hint and the error are the same size on
+ * purpose — one of them replacing the other must not move the form.
+ */
+export const FIELD_LABEL = 'text-[15px] font-semibold text-ink';
+export const FIELD_HINT = 'text-sm text-ink-soft';
+export const FIELD_ERROR = 'text-sm font-semibold text-danger-ink';
 
 /** Text inputs, number inputs, and selects, which all have to line up. */
 export const TEXT_INPUT =

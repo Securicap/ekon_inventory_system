@@ -23,11 +23,11 @@ export function ErrorNotice({
   return (
     <div
       role="alert"
-      className="flex flex-col items-start gap-3 rounded-md border border-red-700 bg-red-50 px-4 py-3 text-red-900"
+      className="flex flex-col items-start gap-3 rounded-md border border-danger bg-danger-soft px-3.5 py-3 text-[15px] text-danger-ink"
     >
-      <p>{t(messageKeyForError(error))}</p>
+      <p className="font-semibold">{t(messageKeyForError(error))}</p>
 
-      {requestId && <p className="text-sm text-red-800">{t('error.requestId', { requestId })}</p>}
+      {requestId && <p className="text-sm">{t('error.requestId', { requestId })}</p>}
 
       {onRetry && (
         <button type="button" className={SECONDARY_BUTTON} onClick={onRetry}>

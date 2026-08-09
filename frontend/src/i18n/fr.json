@@ -36,6 +36,8 @@
   "auth.passwordRequired": "Saisissez votre mot de passe.",
   "auth.passwordTooShort": "Le mot de passe est trop court.",
   "auth.invalidCredentials": "Nom d'utilisateur ou mot de passe invalide.",
+  "auth.passwordCleared": "Le champ est vidé après un refus : la même saisie ne sera pas renvoyée par réflexe.",
+  "auth.noSelfService": "Le compte est créé par le propriétaire. Pas d'inscription, pas de réinitialisation ici.",
   "auth.signOut": "Se déconnecter",
   "auth.signingOut": "Déconnexion…",
   "auth.signOutFailed": "La déconnexion n'a pas abouti. Réessayez.",

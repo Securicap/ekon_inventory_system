@@ -1,8 +1,8 @@
 import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { Brand } from '../../components/Brand.js';
 import { SECONDARY_BUTTON } from '../../components/styles.js';
 import { useTranslator } from '../../i18n/index.js';
 import type { NavigationGroup, View } from '../navigation.js';
-import { Brand } from './Brand.js';
 import { NavigationList } from './NavigationList.js';
 import { UserArea } from './UserArea.js';
 
