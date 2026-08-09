@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Cloud Run runtime for the whole Ekon application: React frontend + Fastify API.
+# Container runtime for the whole Ekon application: React frontend + Fastify API.
 # Node 22 matches package.json's supported engine.
 FROM node:22-bookworm-slim
 
@@ -20,8 +20,10 @@ COPY . .
 # build into backend/public, which Fastify serves from the same origin.
 RUN npm run build
 
-# Cloud Run injects PORT. Setting 8080 here makes the image behave the same way
-# when run locally while still allowing Cloud Run to override it.
+# The application's own default port is 3000; setting 8080 here is what makes the
+# container listen where the hosting platform's public port expects it, and keeps
+# local `docker run` identical to the deployed service. A platform that owns PORT
+# can still override it.
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0 \
