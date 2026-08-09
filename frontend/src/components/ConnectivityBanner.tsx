@@ -38,8 +38,8 @@ export function ConnectivityBanner({ locale }: { locale: Locale }) {
       aria-live="polite"
       className={
         online
-          ? 'w-full bg-emerald-700 px-4 py-3 text-center text-base font-medium text-white'
-          : 'w-full bg-amber-600 px-4 py-3 text-center text-base font-medium text-white'
+          ? 'w-full bg-success px-4 py-3 text-center text-base font-medium text-white'
+          : 'w-full bg-warning px-4 py-3 text-center text-base font-medium text-white'
       }
     >
       {online ? t('connectivity.online') : t('connectivity.offline')}

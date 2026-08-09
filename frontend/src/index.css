@@ -1,14 +1,66 @@
 @import 'tailwindcss';
 
 /*
+ * The application's visual language, in one place.
+ *
+ * Every colour, control height, and shadow the interface is allowed to use is
+ * a theme variable here, so a component names an intention (`bg-surface`,
+ * `text-ink-muted`, `border-line`) rather than picking a shade. Scattering
+ * arbitrary hexes through components is how a small application ends up with
+ * eleven greys, and this one is read at a counter in a hurry.
+ *
  * System font stack only — no web font downloads. The shop is on an unreliable
  * connection and a font file is bytes that buy nothing.
  */
 @theme {
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 
-  /* Minimum touch target for shop-counter use, including on a tablet. */
+  /*
+   * Minimum touch target for shop-counter use. `touch` is the ordinary control
+   * height everywhere; `touch-lg` is the roomier tablet/sheet target, where a
+   * thumb rather than a mouse is doing the work.
+   */
   --spacing-touch: 3rem;
+  --spacing-touch-lg: 3.5rem;
+
+  /* Surfaces, from the page backdrop inwards. */
+  --color-shell: #e8eaee;
+  --color-canvas: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-fill: #eef1f4;
+
+  /* Text. All three pass 4.5:1 on white, on `fill`, and on `canvas`. */
+  --color-ink: #1c2024;
+  --color-ink-soft: #4c545e;
+  --color-ink-muted: #5b636e;
+  --color-ink-disabled: #9aa2ac;
+
+  /* Borders: the ordinary rule, the one that has to hold a control, the hairline. */
+  --color-line: #dce0e6;
+  --color-line-strong: #c3c9d2;
+  --color-rule: #e9ecf0;
+
+  /* Steel blue: actions, the active destination, and the focus ring. */
+  --color-accent: #3c6791;
+  --color-accent-hover: #294764;
+  --color-accent-focus: #1c4f7c;
+  --color-accent-ink: #274b6d;
+  --color-accent-soft: #eaf0f6;
+
+  /*
+   * Status colours. Colour is never the message here — every state also
+   * carries a sentence — but a state that has one gets a consistent one.
+   */
+  --color-success: #1f6b45;
+  --color-success-soft: #eaf5ee;
+  --color-warning: #8a5a00;
+  --color-warning-soft: #fdf4e3;
+  --color-danger: #a32d24;
+  --color-danger-soft: #fbeceb;
+
+  /* Two shadows exist. The second is for a sheet lifted over the page. */
+  --shadow-panel: 0 1px 2px rgba(28, 32, 36, 0.08);
+  --shadow-sheet: 0 4px 14px rgba(28, 32, 36, 0.12);
 }
 
 html,
@@ -19,6 +71,8 @@ body,
 
 body {
   font-family: var(--font-sans);
+  background-color: var(--color-shell);
+  color: var(--color-ink);
   -webkit-text-size-adjust: 100%;
 }
 

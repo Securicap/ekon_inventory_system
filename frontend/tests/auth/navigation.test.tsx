@@ -122,12 +122,13 @@ describe('capability-aware navigation', () => {
       role: 'EMPLOYEE',
       capabilities: DEFAULT_ROLE_CAPABILITIES.EMPLOYEE ?? [],
     });
+    // Operations first, then management — the order the sidebar groups them in.
     expect(navigation()).toEqual([
       ht['nav.home'],
-      ht['nav.products'],
       ht['nav.stock'],
       ht['nav.receive'],
       ht['nav.remove'],
+      ht['nav.products'],
     ]);
     // And not the door that would let them make a shortfall disappear.
     expect(screen.queryByRole('button', { name: ht['nav.adjust'] })).toBeNull();
@@ -161,10 +162,10 @@ describe('capability-aware navigation', () => {
     });
     expect(navigation()).toEqual([
       ht['nav.home'],
-      ht['nav.products'],
       ht['nav.stock'],
       ht['nav.receive'],
       ht['nav.remove'],
+      ht['nav.products'],
     ]);
   });
 
