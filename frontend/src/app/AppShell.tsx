@@ -62,7 +62,9 @@ export function AppShell() {
   const content = (
     <main className="min-w-0 flex-1 p-4 md:p-6 lg:p-8">
       <div className="w-full max-w-[1120px]">
-        {view === 'home' && <HomeScreen />}
+        {/* Home's shortcuts are this same `go` — there is one way to change
+            screen, and Home borrows it rather than owning a second one. */}
+        {view === 'home' && <HomeScreen onNavigate={go} />}
         {view === 'catalog' && <CatalogScreen />}
         {view === 'inventory' && <InventoryScreen />}
         {view === 'receiving' && <ReceivingScreen />}

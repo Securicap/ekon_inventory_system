@@ -1,19 +1,7 @@
-import type { Role } from '@ekon/shared';
+import { ROLE_LABEL_KEYS } from '../../auth/roles.js';
 import { SignOutButton } from '../../auth/SignOutButton.js';
 import { useAuthenticatedUser } from '../../auth/useAuth.js';
-import { useTranslator, type MessageKey } from '../../i18n/index.js';
-
-/**
- * Roles are shown, not acted on. The label tells somebody which account they
- * are using; what they may do is decided by capabilities, here and on the
- * server.
- */
-const ROLE_LABEL_KEYS: Readonly<Record<Role, MessageKey>> = {
-  SUPER_ADMIN: 'role.SUPER_ADMIN',
-  OWNER: 'role.OWNER',
-  MANAGER: 'role.MANAGER',
-  EMPLOYEE: 'role.EMPLOYEE',
-};
+import { useTranslator } from '../../i18n/index.js';
 
 /**
  * Who is signed in, and how to stop being signed in.

@@ -20,6 +20,14 @@
 const FOCUS =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-focus';
 
+/**
+ * A white panel on the application canvas: the one container a screen has.
+ *
+ * There is no card variant, no elevated variant, and no header slot. A screen
+ * that needs a second kind of box almost always needs a second heading instead.
+ */
+export const PANEL = 'rounded-lg border border-line bg-surface p-6';
+
 const BUTTON = `inline-flex min-h-touch items-center justify-center rounded-md border py-2 ${FOCUS}`;
 
 /** Unpressable because something else must happen first: grey, and inert. */

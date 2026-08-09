@@ -52,6 +52,16 @@ export type NavigationGroupId = 'operations' | 'management';
 export interface NavigationItem {
   view: View;
   labelKey: MessageKey;
+  /**
+   * What the destination is for, in one short phrase.
+   *
+   * A sidebar entry has room for a word and Home has room for a sentence, so
+   * the sentence lives here beside the word rather than in a second table
+   * somewhere else — one place still answers "what destinations are there, what
+   * are they called, and who may open them". Home is the landing view and does
+   * not describe itself.
+   */
+  descriptionKey?: MessageKey;
   /** Omitted for the landing view, which every signed-in person can see. */
   capability?: Capability;
   group: NavigationGroupId;
@@ -71,6 +81,7 @@ export const NAVIGATION: readonly NavigationItem[] = [
   {
     view: 'inventory',
     labelKey: 'nav.stock',
+    descriptionKey: 'nav.stockPurpose',
     capability: 'inventory.read',
     group: 'operations',
     everyday: true,
@@ -78,6 +89,7 @@ export const NAVIGATION: readonly NavigationItem[] = [
   {
     view: 'receiving',
     labelKey: 'nav.receive',
+    descriptionKey: 'nav.receivePurpose',
     capability: 'inventory.receive',
     group: 'operations',
     everyday: true,
@@ -85,12 +97,25 @@ export const NAVIGATION: readonly NavigationItem[] = [
   {
     view: 'removal',
     labelKey: 'nav.remove',
+    descriptionKey: 'nav.removePurpose',
     capability: 'inventory.remove',
     group: 'operations',
     everyday: true,
   },
-  { view: 'catalog', labelKey: 'nav.products', capability: 'catalog.read', group: 'management' },
-  { view: 'newUser', labelKey: 'nav.newUser', capability: 'identity.manage', group: 'management' },
+  {
+    view: 'catalog',
+    labelKey: 'nav.products',
+    descriptionKey: 'nav.productsPurpose',
+    capability: 'catalog.read',
+    group: 'management',
+  },
+  {
+    view: 'newUser',
+    labelKey: 'nav.newUser',
+    descriptionKey: 'nav.newUserPurpose',
+    capability: 'identity.manage',
+    group: 'management',
+  },
 ];
 
 const GROUP_LABEL_KEYS: Readonly<Record<NavigationGroupId, MessageKey>> = {
@@ -139,4 +164,20 @@ export function everydayNavigation(
   available: readonly NavigationItem[],
 ): readonly NavigationItem[] {
   return available.filter((item) => item.everyday === true);
+}
+
+/**
+ * The destinations Home offers as shortcuts: everything this person may open
+ * except Home, which is where they already are.
+ *
+ * Deliberately flat and in the array's own order, which puts the operational
+ * destinations before the management ones — the prominence the design gives
+ * them falls out of the one list rather than out of a rule about roles. There
+ * is nothing to group here, so there is no heading that could be left standing
+ * over nothing.
+ */
+export function shortcutNavigation(
+  available: readonly NavigationItem[],
+): readonly NavigationItem[] {
+  return available.filter((item) => item.view !== 'home');
 }

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen } from '@testing-library/react';
+import { cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_ROLE_CAPABILITIES, type Capability, type Role } from '@ekon/shared';
 import { hasCapability } from '../../src/auth/capabilities.js';
@@ -29,11 +29,18 @@ async function signedInAs(options: {
   await screen.findByText('Marie Joseph');
 }
 
+/**
+ * The shell's own navigation, and only it.
+ *
+ * Scoped to the `nav` rather than to every button on the page: Home offers
+ * shortcuts to the same destinations, and a helper that counted those too would
+ * be asserting the landing screen's contents while claiming to assert the
+ * sidebar's.
+ */
 function navigation(): string[] {
-  return screen
+  return within(screen.getByRole('navigation', { name: ht['nav.main'] }))
     .getAllByRole('button')
-    .map((button) => button.textContent ?? '')
-    .filter((label) => label !== ht['auth.signOut']);
+    .map((button) => button.textContent ?? '');
 }
 
 /**
