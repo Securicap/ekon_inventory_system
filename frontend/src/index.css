@@ -63,6 +63,7 @@
    * sentence sitting on the fill is darkened so it reads at full contrast
    * rather than at the edge of it.
    */
+  --color-success-ink: #14432c;
   --color-warning-ink: #553800;
   --color-danger-ink: #7a201a;
 

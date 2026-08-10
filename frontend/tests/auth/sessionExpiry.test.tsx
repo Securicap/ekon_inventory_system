@@ -77,7 +77,9 @@ describe('a session that ends mid-use', () => {
     fireEvent.click(screen.getByRole('button', { name: ht['nav.stock'] }));
     await screen.findByRole('heading', { name: 'Diri', level: 3 });
     fireEvent.click(screen.getByRole('button', { name: ht['nav.products'] }));
-    await screen.findByRole('heading', { name: 'Diri', level: 3 });
+    // The catalog is a register: a product is a row-group header over its
+    // variants, not a heading over a card.
+    await screen.findByRole('rowheader', { name: 'Diri' });
 
     void queryClient.refetchQueries({ queryKey: ['catalog', 'products'] });
 

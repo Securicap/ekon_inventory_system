@@ -18,7 +18,7 @@ export function PageHeader({
   aside,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: string | undefined;
   /** One short fact, right-aligned on a wide screen and wrapped under on a narrow one. */
   aside?: ReactNode;
 }) {
