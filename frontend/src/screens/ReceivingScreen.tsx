@@ -9,7 +9,17 @@ import {
 import { useAuth } from '../auth/useAuth.js';
 import { useProtectedQuery } from '../auth/useProtectedQuery.js';
 import { ErrorNotice } from '../components/ErrorNotice.js';
-import { PRIMARY_BUTTON, SECONDARY_BUTTON, TEXT_INPUT } from '../components/styles.js';
+import { PageHeader } from '../components/PageHeader.js';
+import {
+  FIELD_ERROR,
+  FIELD_HINT,
+  FIELD_LABEL,
+  PANEL,
+  PRIMARY_BUTTON,
+  PRIMARY_BUTTON_BUSY,
+  SECONDARY_BUTTON,
+  TEXT_INPUT,
+} from '../components/styles.js';
 import { useTranslator } from '../i18n/index.js';
 import { api, ApiError, NetworkError } from '../lib/api.js';
 import { localDateTimeToIso, toLocalDateTimeInputValue } from '../lib/businessTime.js';
@@ -24,6 +34,8 @@ import {
   type ReceivingFieldErrors,
 } from '../lib/receiving.js';
 import { receiveStock } from '../lib/receivingApi.js';
+import { Confirmation, FailureActions, UncertainNotice } from './receiving/OutcomePanels.js';
+import { ReceiptSummary } from './receiving/ReceiptSummary.js';
 
 /**
  * Booking in a delivery: one item, one place, one quantity, one arrival time.
@@ -105,6 +117,17 @@ export function ReceivingScreen() {
   const [sent, setSent] = useState<SentReceipt | null>(null);
   /** What the server answered. Only ever set from a response. */
   const [result, setResult] = useState<ReceiveStockResponse | null>(null);
+  /**
+   * The failure that put this attempt into the failed phase, kept rather than
+   * read off the mutation.
+   *
+   * The mutation clears its own `error` the moment a retry goes pending, and
+   * this screen has to go on saying what happened *while* the retry is in
+   * flight — otherwise pressing "send the same receipt again" would replace the
+   * explanation of why with a blank, and the block the person is waiting on
+   * would decide it had nothing to offer.
+   */
+  const [failure, setFailure] = useState<unknown>(null);
 
   const variantRef = useRef<HTMLSelectElement>(null);
   const locationRef = useRef<HTMLSelectElement>(null);
@@ -145,6 +168,7 @@ export function ReceivingScreen() {
       // go through `useProtectedQuery`; this is the same rule, said once here
       // because there is one write in the application.
       if (error instanceof ApiError && error.status === 401) reportSessionEnded();
+      setFailure(error);
       setPhase('failed');
     },
   });
@@ -198,6 +222,12 @@ export function ReceivingScreen() {
 
   const sourcesReady = variantChoices.length > 0 && locationChoices.length > 0;
   const busy = submit.isPending;
+  /**
+   * A request in flight that this form started, as opposed to a resend of an
+   * attempt that already failed. Both disable the form; only the first is the
+   * form's own progress to report.
+   */
+  const submitting = busy && phase === 'editing';
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -247,10 +277,18 @@ export function ReceivingScreen() {
     else if (errors.occurredAtLocal) occurredAtRef.current?.focus();
   }
 
-  /** Sends the same command again, under the same id. Nothing is rebuilt. */
+  /**
+   * Sends the same command again, under the same id. Nothing is rebuilt.
+   *
+   * The phase stays `failed` for the whole flight. This attempt has not gone
+   * back to being edited — it is the same saved receipt being asked about a
+   * second time — so the explanation of what happened, and the block that
+   * offers this, stay on screen with the button marked busy. Dropping to
+   * `editing` would put the ordinary form back under somebody who is waiting to
+   * hear whether their delivery was written.
+   */
   function retrySameReceipt(): void {
     if (busy || !sent) return;
-    setPhase('editing');
     submit.mutate(sent.request);
   }
 
@@ -277,6 +315,7 @@ export function ReceivingScreen() {
     setFieldErrors({});
     setSent(null);
     setResult(null);
+    setFailure(null);
     setPhase('editing');
     submit.reset();
 
@@ -287,53 +326,72 @@ export function ReceivingScreen() {
   }
 
   const loading = products.isPending || locations.isPending;
+  const choice = variantChoices.find((candidate) => candidate.variantId === variantId);
+  const locationName = locationChoices.find((location) => location.id === locationId)?.name ?? '';
+  const selectedLocation = locationChoices.find((location) => location.id === locationId);
+  /** The typed quantity, only when it is a whole number this ledger can hold. */
+  const typedQuantity = wholeQuantity(quantity);
+  const locked = busy || phase === 'failed';
+
+  /**
+   * Stepping the quantity writes the same string the keyboard would write, into
+   * the same field, and is offered only when it can produce a value the form
+   * would accept — so a press can never make the field invalid, and the field
+   * is still the place a quantity is entered.
+   */
+  function step(by: 1 | -1): void {
+    if (typedQuantity === null) return;
+    setQuantity(String(typedQuantity + by));
+  }
 
   return (
-    <section className="flex flex-col gap-4">
-      <div>
-        <h2 className="text-xl font-medium">{t('receiving.title')}</h2>
-        <p className="text-slate-600">{t('receiving.description')}</p>
-      </div>
+    <section className="flex flex-col gap-6">
+      <PageHeader title={t('receiving.title')} subtitle={t('receiving.description')} />
 
-      {loading && <p className="text-slate-600">{t('status.loading')}</p>}
+      {loading && (
+        <p role="status" className="text-[15px] text-ink-soft">
+          {t('status.loading')}
+        </p>
+      )}
 
       {products.isError && <ErrorNotice error={products.error} />}
       {locations.isError && <ErrorNotice error={locations.error} />}
 
       {products.data && variantChoices.length === 0 && (
-        <p className="text-slate-700">{t('receiving.noVariants')}</p>
+        <p className="text-[15px] text-ink-soft">{t('receiving.noVariants')}</p>
       )}
       {locations.data && locationChoices.length === 0 && (
-        <p className="text-slate-700">{t('receiving.noLocations')}</p>
+        <p className="text-[15px] text-ink-soft">{t('receiving.noLocations')}</p>
       )}
 
       {phase === 'succeeded' && sent && result && (
         <div ref={outcomeRef} tabIndex={-1}>
-          <Confirmation sent={sent} result={result} />
+          <Confirmation
+            quantity={sent.request.quantity}
+            variantLabel={sent.variantLabel}
+            locationName={sent.locationName}
+            result={result}
+          />
         </div>
       )}
 
       {phase === 'failed' && (
-        <div ref={outcomeRef} tabIndex={-1} className="flex flex-col gap-3">
-          <ErrorNotice error={submit.error} />
-          <div className="flex flex-wrap gap-2">
-            {/* Offered only when sending the same thing again could plausibly
-                work. A refused item or a changed command will be refused
-                identically however many times it is sent, and a button that
-                invites that is a button that wastes somebody's afternoon. */}
-            {canRetry(submit.error) && (
-              <button type="button" className={PRIMARY_BUTTON} onClick={retrySameReceipt}>
-                {t('receiving.retrySame')}
-              </button>
-            )}
-            <button
-              type="button"
-              className={SECONDARY_BUTTON}
-              onClick={() => startNewReceipt({ refreshChoices: true })}
-            >
-              {t('receiving.startNew')}
-            </button>
-          </div>
+        <div ref={outcomeRef} tabIndex={-1} className="flex flex-col gap-4">
+          {/* A retryable failure is not a red error — it is "we do not know",
+              and the honest instruction is to send the same thing again. A
+              definitive refusal is the shared notice, unchanged. */}
+          {canRetry(failure) ? (
+            <UncertainNotice error={failure} />
+          ) : (
+            <ErrorNotice error={failure} />
+          )}
+
+          <FailureActions
+            canRetry={canRetry(failure)}
+            busy={busy}
+            onRetry={retrySameReceipt}
+            onStartNew={() => startNewReceipt({ refreshChoices: true })}
+          />
         </div>
       )}
 
@@ -352,130 +410,193 @@ export function ReceivingScreen() {
           onSubmit={handleSubmit}
           noValidate
           aria-busy={busy}
-          className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 sm:p-6"
+          className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_344px]"
         >
-          <div className="flex flex-col gap-1">
-            <label htmlFor="receiving-variant" className="font-medium">
-              {t('receiving.variant')}
-            </label>
-            <select
-              id="receiving-variant"
-              ref={variantRef}
-              name="variantId"
-              className={TEXT_INPUT}
-              value={variantId}
-              disabled={busy || phase === 'failed'}
-              onChange={(event) => setVariantId(event.target.value)}
-              aria-invalid={fieldErrors.variantId ? true : undefined}
-              aria-describedby={fieldErrors.variantId ? 'receiving-variant-error' : undefined}
+          <div className={`${PANEL} flex flex-col gap-5`}>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="receiving-variant" className={FIELD_LABEL}>
+                {t('receiving.variant')}
+              </label>
+              <select
+                id="receiving-variant"
+                ref={variantRef}
+                name="variantId"
+                className={TEXT_INPUT}
+                value={variantId}
+                disabled={locked}
+                onChange={(event) => setVariantId(event.target.value)}
+                aria-invalid={fieldErrors.variantId ? true : undefined}
+                aria-describedby={fieldErrors.variantId ? 'receiving-variant-error' : undefined}
+              >
+                <option value="">{t('receiving.choose')}</option>
+                {variantChoices.map((candidate) => (
+                  <option key={candidate.variantId} value={candidate.variantId}>
+                    {candidate.label}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.variantId && (
+                <p id="receiving-variant-error" className={FIELD_ERROR}>
+                  {t(fieldErrors.variantId)}
+                </p>
+              )}
+
+              {/* The one line in the `<option>` broken back into the three
+                  things it is, so the hierarchy is readable without opening the
+                  list again. */}
+              {choice !== undefined && (
+                <div className="mt-1 rounded-md border-l-[3px] border-accent bg-accent-soft px-3.5 py-2.5">
+                  <p className="text-base font-semibold text-ink">{choice.productName}</p>
+                  <p className="text-sm text-ink">
+                    {choice.attributes === '' ? t('catalog.noAttributes') : choice.attributes}
+                  </p>
+                  <p className="tabular text-[13px] text-ink-soft">
+                    <span className="sr-only">{t('catalog.sku')} </span>
+                    {choice.sku}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5 border-t border-rule pt-5">
+              <label htmlFor="receiving-location" className={FIELD_LABEL}>
+                {t('receiving.location')}
+              </label>
+              <select
+                id="receiving-location"
+                ref={locationRef}
+                name="locationId"
+                className={TEXT_INPUT}
+                value={locationId}
+                disabled={locked}
+                onChange={(event) => setLocationId(event.target.value)}
+                aria-invalid={fieldErrors.locationId ? true : undefined}
+                aria-describedby={fieldErrors.locationId ? 'receiving-location-error' : undefined}
+              >
+                <option value="">{t('receiving.choose')}</option>
+                {locationChoices.map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.locationId && (
+                <p id="receiving-location-error" className={FIELD_ERROR}>
+                  {t(fieldErrors.locationId)}
+                </p>
+              )}
+              {/* Said in words rather than by a highlight: this is the counter
+                  the shop receives at, and it is why the field was already
+                  filled in. */}
+              {selectedLocation?.isDefault === true && (
+                <p className={FIELD_HINT}>{t('receiving.locationPrefilled')}</p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-6 border-t border-rule pt-5">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="receiving-quantity" className={FIELD_LABEL}>
+                  {t('receiving.quantity')}
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className={`${SECONDARY_BUTTON} size-12 shrink-0 px-0 text-xl`}
+                    aria-label={t('receiving.quantityMinus')}
+                    disabled={locked || typedQuantity === null || typedQuantity <= 1}
+                    onClick={() => step(-1)}
+                  >
+                    <span aria-hidden="true">&minus;</span>
+                  </button>
+                  <input
+                    id="receiving-quantity"
+                    ref={quantityRef}
+                    name="quantity"
+                    type="number"
+                    min={1}
+                    step={1}
+                    max={MAX_MOVEMENT_QUANTITY}
+                    /* A phone keyboard with digits on it, at a counter, in a hurry. */
+                    inputMode="numeric"
+                    className={`${TEXT_INPUT} tabular w-28 text-center text-xl font-bold`}
+                    value={quantity}
+                    disabled={locked}
+                    onChange={(event) => setQuantity(event.target.value)}
+                    aria-invalid={fieldErrors.quantity ? true : undefined}
+                    aria-describedby={fieldErrors.quantity ? 'receiving-quantity-error' : undefined}
+                  />
+                  <button
+                    type="button"
+                    className={`${SECONDARY_BUTTON} size-12 shrink-0 px-0 text-xl`}
+                    aria-label={t('receiving.quantityPlus')}
+                    disabled={
+                      locked || typedQuantity === null || typedQuantity >= MAX_MOVEMENT_QUANTITY
+                    }
+                    onClick={() => step(1)}
+                  >
+                    <span aria-hidden="true">+</span>
+                  </button>
+                </div>
+                {fieldErrors.quantity && (
+                  <p id="receiving-quantity-error" className={FIELD_ERROR}>
+                    {t(fieldErrors.quantity, { max: MAX_MOVEMENT_QUANTITY })}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex min-w-60 flex-1 flex-col gap-1.5">
+                <label htmlFor="receiving-occurred-at" className={FIELD_LABEL}>
+                  {t('receiving.occurredAt')}
+                </label>
+                <input
+                  id="receiving-occurred-at"
+                  ref={occurredAtRef}
+                  name="occurredAt"
+                  type="datetime-local"
+                  className={`${TEXT_INPUT} tabular`}
+                  value={occurredAtLocal}
+                  disabled={locked}
+                  onChange={(event) => setOccurredAtLocal(event.target.value)}
+                  aria-invalid={fieldErrors.occurredAtLocal ? true : undefined}
+                  aria-describedby={
+                    fieldErrors.occurredAtLocal ? 'receiving-occurred-at-error' : undefined
+                  }
+                />
+                {fieldErrors.occurredAtLocal ? (
+                  <p id="receiving-occurred-at-error" className={FIELD_ERROR}>
+                    {t(fieldErrors.occurredAtLocal)}
+                  </p>
+                ) : (
+                  <p className={FIELD_HINT}>{t('receiving.occurredAtHint')}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <ReceiptSummary choice={choice} locationName={locationName} quantity={typedQuantity}>
+            {/* The button says what is happening, and it is where the keyboard
+                already is when it happens, so its own name is the announcement.
+                A second live region beside it would say the same thing twice and
+                leave the confirmation competing with it to be read.
+
+                It reports busy only for its *own* submission. A resend belongs
+                to the block that offered it, and two buttons claiming to be
+                working on the same request is one claim too many. */}
+            <button
+              type="submit"
+              className={`${submitting ? PRIMARY_BUTTON_BUSY : PRIMARY_BUTTON} min-h-touch-lg w-full text-[17px]`}
+              disabled={busy || phase === 'failed' || !sourcesReady}
+              aria-busy={submitting}
             >
-              <option value="">{t('receiving.choose')}</option>
-              {variantChoices.map((choice) => (
-                <option key={choice.variantId} value={choice.variantId}>
-                  {choice.label}
-                </option>
-              ))}
-            </select>
-            {fieldErrors.variantId && (
-              <p id="receiving-variant-error" className="text-red-800">
-                {t(fieldErrors.variantId)}
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <label htmlFor="receiving-location" className="font-medium">
-              {t('receiving.location')}
-            </label>
-            <select
-              id="receiving-location"
-              ref={locationRef}
-              name="locationId"
-              className={TEXT_INPUT}
-              value={locationId}
-              disabled={busy || phase === 'failed'}
-              onChange={(event) => setLocationId(event.target.value)}
-              aria-invalid={fieldErrors.locationId ? true : undefined}
-              aria-describedby={fieldErrors.locationId ? 'receiving-location-error' : undefined}
-            >
-              <option value="">{t('receiving.choose')}</option>
-              {locationChoices.map((location) => (
-                <option key={location.id} value={location.id}>
-                  {location.name}
-                </option>
-              ))}
-            </select>
-            {fieldErrors.locationId && (
-              <p id="receiving-location-error" className="text-red-800">
-                {t(fieldErrors.locationId)}
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <label htmlFor="receiving-quantity" className="font-medium">
-              {t('receiving.quantity')}
-            </label>
-            <input
-              id="receiving-quantity"
-              ref={quantityRef}
-              name="quantity"
-              type="number"
-              min={1}
-              step={1}
-              max={MAX_MOVEMENT_QUANTITY}
-              /* A phone keyboard with digits on it, at a counter, in a hurry. */
-              inputMode="numeric"
-              className={TEXT_INPUT}
-              value={quantity}
-              disabled={busy || phase === 'failed'}
-              onChange={(event) => setQuantity(event.target.value)}
-              aria-invalid={fieldErrors.quantity ? true : undefined}
-              aria-describedby={fieldErrors.quantity ? 'receiving-quantity-error' : undefined}
-            />
-            {fieldErrors.quantity && (
-              <p id="receiving-quantity-error" className="text-red-800">
-                {t(fieldErrors.quantity, { max: MAX_MOVEMENT_QUANTITY })}
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <label htmlFor="receiving-occurred-at" className="font-medium">
-              {t('receiving.occurredAt')}
-            </label>
-            <input
-              id="receiving-occurred-at"
-              ref={occurredAtRef}
-              name="occurredAt"
-              type="datetime-local"
-              className={TEXT_INPUT}
-              value={occurredAtLocal}
-              disabled={busy || phase === 'failed'}
-              onChange={(event) => setOccurredAtLocal(event.target.value)}
-              aria-invalid={fieldErrors.occurredAtLocal ? true : undefined}
-              aria-describedby={
-                fieldErrors.occurredAtLocal ? 'receiving-occurred-at-error' : undefined
-              }
-            />
-            {fieldErrors.occurredAtLocal && (
-              <p id="receiving-occurred-at-error" className="text-red-800">
-                {t(fieldErrors.occurredAtLocal)}
-              </p>
-            )}
-          </div>
-
-          {/* The button says what is happening, and it is where the keyboard
-              already is when it happens, so its own name is the announcement.
-              A second live region beside it would say the same thing twice and
-              leave the confirmation competing with it to be read. */}
-          <button
-            type="submit"
-            className={PRIMARY_BUTTON}
-            disabled={busy || phase === 'failed' || !sourcesReady}
-          >
-            {busy ? t('receiving.submitting') : t('receiving.submit')}
-          </button>
+              {submitting && (
+                <span
+                  aria-hidden="true"
+                  className="mr-2.5 inline-block size-3.5 animate-spin rounded-full border-2 border-white/45 border-t-white motion-reduce:animate-none"
+                />
+              )}
+              {submitting ? t('receiving.submitting') : t('receiving.submit')}
+            </button>
+          </ReceiptSummary>
         </form>
       )}
     </section>
@@ -483,39 +604,20 @@ export function ReceivingScreen() {
 }
 
 /**
- * What was recorded, in the terms the person used to record it.
+ * The quantity as a number, but only when it is one the ledger could hold: a
+ * whole number of units, at least one, no larger than the movement ceiling.
  *
- * The item, the place, how many, and what is on the shelf now — which is the
- * number they will be asked about. Deliberately not here: the movement id, the
- * request hash, the quantity before, the recorded time, the movement type.
- * Those are how the ledger keeps its own promises, and none of them is
- * something an employee can act on or should have to read.
+ * Anything else is `null` — which is what the summary shows a dash for and what
+ * makes the steppers unavailable. It is a reading of the field, never a
+ * correction of it: a value the form would refuse stays on screen to be
+ * refused, rather than being quietly rounded into something else.
  */
-function Confirmation({ sent, result }: { sent: SentReceipt; result: ReceiveStockResponse }) {
-  const t = useTranslator();
-
-  return (
-    <div
-      role="status"
-      className="flex flex-col gap-2 rounded-md border border-green-700 bg-green-50 px-4 py-3 text-green-900"
-    >
-      {/* A sentence, not a colour. Somebody who cannot tell green from grey
-          reads exactly the same confirmation. */}
-      <p className="font-medium">{t('receiving.success', { quantity: sent.request.quantity })}</p>
-      <p>
-        {t('receiving.resultingQuantity', {
-          location: sent.locationName,
-          quantity: result.quantityAfter,
-        })}
-      </p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-        <dt className="text-green-800">{t('receiving.variant')}</dt>
-        <dd className="font-medium">{sent.variantLabel}</dd>
-        <dt className="text-green-800">{t('receiving.location')}</dt>
-        <dd className="font-medium">{sent.locationName}</dd>
-      </dl>
-    </div>
-  );
+function wholeQuantity(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_MOVEMENT_QUANTITY) return null;
+  return parsed;
 }
 
 /**

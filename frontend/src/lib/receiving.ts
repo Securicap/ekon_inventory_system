@@ -6,7 +6,7 @@ import {
 } from '@ekon/shared';
 import type { MessageKey } from '../i18n/index.js';
 import { localDateTimeToIso } from './businessTime.js';
-import { formatVariantLabel } from './variants.js';
+import { formatVariantAttributes, formatVariantLabel } from './variants.js';
 
 /**
  * The parts of receiving that are decisions rather than markup: which items may
@@ -28,6 +28,17 @@ export interface VariantChoice {
   variantId: string;
   /** Product name, attributes when there are any, and the SKU. */
   label: string;
+  /**
+   * The same three facts kept apart, for the places that show the hierarchy
+   * rather than one line: a product name above its attributes above its SKU.
+   *
+   * Derived from the label's own parts rather than re-read from the catalog, so
+   * an option and the panel beside it can never disagree about what was chosen.
+   */
+  productName: string;
+  /** Formatted attributes, or an empty string for a product sold one way. */
+  attributes: string;
+  sku: string;
 }
 
 /**
@@ -50,6 +61,9 @@ export function activeVariantChoices(products: ListProductsResponse): VariantCho
         .map((variant) => ({
           variantId: variant.id,
           label: formatVariantLabel(product.name, variant.attributes, variant.sku),
+          productName: product.name,
+          attributes: formatVariantAttributes(variant.attributes),
+          sku: variant.sku,
         })),
     )
     .sort((a, b) => a.label.localeCompare(b.label, 'fr'));
