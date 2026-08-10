@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import ht from '../../src/i18n/ht.json';
 import { filterStockBalances, normalizeSearchText } from '../../src/lib/stock.js';
@@ -154,6 +154,54 @@ describe('searching the stock list', () => {
     expect(field).toBeEnabled();
     expect(screen.getByText(ht['stock.searchLabel'])).toBeInTheDocument();
   });
+
+  it('offers no filter the application does not have', async () => {
+    await openShelf();
+
+    // One field, and nothing beside it. A stock-status filter, a location
+    // filter, a category filter, or a sort menu would each be a question this
+    // API cannot answer, drawn as though it could.
+    const page = screen.getByRole('main');
+    expect(within(page).getAllByRole('searchbox')).toHaveLength(1);
+    expect(within(page).queryAllByRole('combobox')).toEqual([]);
+    expect(within(page).queryAllByRole('menu')).toEqual([]);
+  });
+
+  it('leaves the no-results sentence saying something different from an empty shop', async () => {
+    // Two different remedies: check the spelling, or put something in the shop.
+    // One sentence for both would send somebody to fix the wrong thing.
+    await openShelf();
+    typeSearch('pen');
+
+    expect(screen.getByText(ht['stock.noMatches'])).toBeInTheDocument();
+    expect(screen.queryByText(ht['stock.noVariants'])).toBeNull();
+    expect(ht['stock.noMatches']).not.toBe(ht['stock.noVariants']);
+  });
+});
+
+/**
+ * The filter is computed once, in the screen, and handed to whichever
+ * presentation is mounted. Three components filtering the same response three
+ * ways would eventually be three answers to what the shop has.
+ */
+describe('searching at every width', () => {
+  it.each(['desktop', 'tablet', 'mobile'] as const)(
+    'filters the same records on %s',
+    async (at) => {
+      await openStock({ [BALANCES_ROUTE]: json(SHELF) }, { viewport: at });
+      expect(stockHeadings()).toEqual(['Diri', 'Lwil', 'Sik']);
+
+      typeSearch('gwosè');
+      expect(stockHeadings()).toEqual(['Diri', 'Sik']);
+
+      typeSearch('pen');
+      expect(stockHeadings()).toEqual([]);
+      expect(screen.getByText(ht['stock.noMatches'])).toBeInTheDocument();
+
+      typeSearch('');
+      expect(stockHeadings()).toEqual(['Diri', 'Lwil', 'Sik']);
+    },
+  );
 });
 
 /**
