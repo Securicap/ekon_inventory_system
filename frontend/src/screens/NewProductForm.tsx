@@ -9,7 +9,16 @@ import {
 } from '@ekon/shared';
 import { useAuth } from '../auth/useAuth.js';
 import { ErrorNotice } from '../components/ErrorNotice.js';
-import { PRIMARY_BUTTON, SECONDARY_BUTTON, TEXT_INPUT } from '../components/styles.js';
+import {
+  FIELD_ERROR,
+  FIELD_HINT,
+  FIELD_LABEL,
+  PANEL,
+  PRIMARY_BUTTON,
+  PRIMARY_BUTTON_BUSY,
+  SECONDARY_BUTTON,
+  TEXT_INPUT,
+} from '../components/styles.js';
 import { useTranslator } from '../i18n/index.js';
 import { ApiError, NetworkError } from '../lib/api.js';
 import {
@@ -21,6 +30,7 @@ import {
 } from '../lib/catalog.js';
 import { createProduct } from '../lib/catalogApi.js';
 import { catalogProductsQueryKey } from '../lib/catalogQueries.js';
+import { formatVariantAttributes } from '../lib/variants.js';
 
 /**
  * Creating a product, so there is something the shop can take stock of.
@@ -198,219 +208,319 @@ export function NewProductForm({
     fieldErrors.attributes?.[`${variantIndex}.${attributeIndex}`];
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      noValidate
-      aria-label={t('catalog.newProductTitle')}
-      className="flex max-w-2xl flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4"
-    >
-      <div>
-        <h3 className="text-lg font-medium">{t('catalog.newProductTitle')}</h3>
-        <p className="text-slate-600">{t('catalog.newProductDescription')}</p>
-      </div>
+    <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,640px)_1fr]">
+      <form
+        onSubmit={handleSubmit}
+        noValidate
+        aria-label={t('catalog.newProductTitle')}
+        className={`${PANEL} flex flex-col gap-4.5`}
+      >
+        <div>
+          <h3 className="text-lg font-semibold text-ink">{t('catalog.newProductTitle')}</h3>
+          <p className="mt-1 text-[15px] text-ink-soft">{t('catalog.newProductDescription')}</p>
+        </div>
 
-      {submit.isError && (
-        <div ref={outcomeRef} tabIndex={-1}>
-          {isUncertain(submit.error) ? (
-            <div
-              role="alert"
-              className="flex flex-col items-start gap-3 rounded-md border border-amber-700 bg-amber-50 px-4 py-3 text-amber-900"
-            >
-              <p>{t('catalog.uncertain')}</p>
-              <button type="button" className={SECONDARY_BUTTON} onClick={checkTheList}>
-                {t('catalog.checkList')}
-              </button>
-            </div>
-          ) : isVariantConflict(submit.error) ? (
-            <p
-              role="alert"
-              className="rounded-md border border-red-700 bg-red-50 px-4 py-3 text-red-900"
-            >
-              {t('catalog.variantExists')}
+        {submit.isError && (
+          <div ref={outcomeRef} tabIndex={-1}>
+            {isUncertain(submit.error) ? (
+              <div
+                role="alert"
+                className="flex flex-col items-start gap-3 rounded-md border border-warning bg-warning-soft px-3.5 py-3 text-[15px] text-warning-ink"
+              >
+                <p className="text-pretty">{t('catalog.uncertain')}</p>
+                <button type="button" className={SECONDARY_BUTTON} onClick={checkTheList}>
+                  {t('catalog.checkList')}
+                </button>
+              </div>
+            ) : isVariantConflict(submit.error) ? (
+              <p
+                role="alert"
+                className="rounded-md border border-danger bg-danger-soft px-3.5 py-3 text-[15px] font-semibold text-danger-ink"
+              >
+                {t('catalog.variantExists')}
+              </p>
+            ) : (
+              <ErrorNotice error={submit.error} />
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="new-product-name" className={FIELD_LABEL}>
+            {t('catalog.productName')}
+          </label>
+          <input
+            id="new-product-name"
+            ref={nameRef}
+            name="name"
+            type="text"
+            autoComplete="off"
+            maxLength={PRODUCT_NAME_MAX_LENGTH}
+            required
+            className={TEXT_INPUT}
+            value={values.name}
+            onChange={(event) => update({ name: event.target.value })}
+            aria-invalid={fieldErrors.name ? true : undefined}
+            aria-describedby={fieldErrors.name ? 'new-product-name-error' : 'new-product-name-hint'}
+          />
+          {fieldErrors.name ? (
+            <p id="new-product-name-error" className={FIELD_ERROR}>
+              {t(fieldErrors.name, { max: PRODUCT_NAME_MAX_LENGTH })}
             </p>
           ) : (
-            <ErrorNotice error={submit.error} />
+            <p id="new-product-name-hint" className={FIELD_HINT}>
+              {t('catalog.productNameHint')}
+            </p>
           )}
         </div>
-      )}
 
-      <div className="flex flex-col gap-1">
-        <label htmlFor="new-product-name" className="font-medium">
-          {t('catalog.productName')}
-        </label>
-        <input
-          id="new-product-name"
-          ref={nameRef}
-          name="name"
-          type="text"
-          autoComplete="off"
-          maxLength={PRODUCT_NAME_MAX_LENGTH}
-          required
-          className={TEXT_INPUT}
-          value={values.name}
-          onChange={(event) => update({ name: event.target.value })}
-          aria-invalid={fieldErrors.name ? true : undefined}
-          aria-describedby={fieldErrors.name ? 'new-product-name-error' : 'new-product-name-hint'}
-        />
-        {fieldErrors.name ? (
-          <p id="new-product-name-error" className="text-red-800">
-            {t(fieldErrors.name, { max: PRODUCT_NAME_MAX_LENGTH })}
-          </p>
-        ) : (
-          <p id="new-product-name-hint" className="text-sm text-slate-600">
-            {t('catalog.productNameHint')}
-          </p>
-        )}
-      </div>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="new-product-description" className={FIELD_LABEL}>
+            {t('catalog.productDescription')}
+          </label>
+          <textarea
+            id="new-product-description"
+            name="description"
+            rows={2}
+            maxLength={PRODUCT_DESCRIPTION_MAX_LENGTH}
+            className={TEXT_INPUT}
+            value={values.description}
+            onChange={(event) => update({ description: event.target.value })}
+            aria-invalid={fieldErrors.description ? true : undefined}
+            aria-describedby={fieldErrors.description ? 'new-product-description-error' : undefined}
+          />
+          {fieldErrors.description && (
+            <p id="new-product-description-error" className={FIELD_ERROR}>
+              {t(fieldErrors.description, { max: PRODUCT_DESCRIPTION_MAX_LENGTH })}
+            </p>
+          )}
+        </div>
 
-      <div className="flex flex-col gap-1">
-        <label htmlFor="new-product-description" className="font-medium">
-          {t('catalog.productDescription')}
-        </label>
-        <textarea
-          id="new-product-description"
-          name="description"
-          rows={2}
-          maxLength={PRODUCT_DESCRIPTION_MAX_LENGTH}
-          className={TEXT_INPUT}
-          value={values.description}
-          onChange={(event) => update({ description: event.target.value })}
-          aria-invalid={fieldErrors.description ? true : undefined}
-          aria-describedby={fieldErrors.description ? 'new-product-description-error' : undefined}
-        />
-        {fieldErrors.description && (
-          <p id="new-product-description-error" className="text-red-800">
-            {t(fieldErrors.description, { max: PRODUCT_DESCRIPTION_MAX_LENGTH })}
-          </p>
-        )}
-      </div>
+        <fieldset className="flex flex-col gap-3.5 border-t border-rule pt-4.5">
+          {/* A direct child of the fieldset, which is the only place a legend
+              names the group it belongs to. The action sits on the line under
+              it rather than beside it, because moving the legend into a flex
+              row would cost that association for a few pixels of alignment. */}
+          <legend className="text-base font-semibold text-ink">
+            {t('catalog.variantsLegend')}
+          </legend>
 
-      <fieldset className="flex flex-col gap-3 border-t border-slate-200 pt-3">
-        <legend className="font-medium">{t('catalog.variantsLegend')}</legend>
-        <p className="text-sm text-slate-600">{t('catalog.variantsHint')}</p>
+          <p className={FIELD_HINT}>{t('catalog.variantsHint')}</p>
 
-        {values.variants.map((variant, variantIndex) => (
-          <div
-            key={variantIndex}
-            className="flex flex-col gap-2 rounded-md border border-slate-200 p-3"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className="font-medium">
-                {t('catalog.variantNumber', { number: variantIndex + 1 })}
-              </h4>
-              {values.variants.length > 1 && (
+          {values.variants.map((variant, variantIndex) => (
+            <div
+              key={variantIndex}
+              className="flex flex-col gap-3 rounded-md border border-line bg-canvas p-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <h4 className="text-[15px] font-semibold text-ink">
+                  {t('catalog.variantNumber', { number: variantIndex + 1 })}
+                </h4>
+                {values.variants.length > 1 && (
+                  <button
+                    type="button"
+                    className={QUIET_BUTTON}
+                    aria-label={t('catalog.removeVariant', { number: variantIndex + 1 })}
+                    onClick={() => removeVariant(variantIndex)}
+                  >
+                    {t('catalog.remove')}
+                  </button>
+                )}
+              </div>
+
+              {fieldErrors.variants?.[String(variantIndex)] && (
+                <p role="alert" className={FIELD_ERROR}>
+                  {t('catalog.duplicateVariant')}
+                </p>
+              )}
+
+              {variant.attributes.map((attribute, attributeIndex) => {
+                const error = attributeError(variantIndex, attributeIndex);
+                const base = `new-product-v${variantIndex}-a${attributeIndex}`;
+                return (
+                  <div key={attributeIndex} className="flex flex-col gap-1.5">
+                    <div className="flex flex-wrap items-end gap-3">
+                      <div className="flex min-w-38 flex-1 flex-col gap-1.5">
+                        <label htmlFor={`${base}-name`} className="text-sm font-semibold text-ink">
+                          {t('catalog.attributeName')}
+                        </label>
+                        <input
+                          id={`${base}-name`}
+                          type="text"
+                          autoComplete="off"
+                          maxLength={ATTRIBUTE_NAME_MAX_LENGTH}
+                          className={TEXT_INPUT}
+                          value={attribute.name}
+                          onChange={(event) =>
+                            updateAttribute(variantIndex, attributeIndex, {
+                              name: event.target.value,
+                            })
+                          }
+                          aria-invalid={error ? true : undefined}
+                          aria-describedby={error ? `${base}-error` : undefined}
+                        />
+                      </div>
+                      <div className="flex min-w-38 flex-1 flex-col gap-1.5">
+                        <label htmlFor={`${base}-value`} className="text-sm font-semibold text-ink">
+                          {t('catalog.attributeValue')}
+                        </label>
+                        <input
+                          id={`${base}-value`}
+                          type="text"
+                          autoComplete="off"
+                          maxLength={ATTRIBUTE_VALUE_MAX_LENGTH}
+                          className={TEXT_INPUT}
+                          value={attribute.value}
+                          onChange={(event) =>
+                            updateAttribute(variantIndex, attributeIndex, {
+                              value: event.target.value,
+                            })
+                          }
+                          aria-invalid={error ? true : undefined}
+                          aria-describedby={error ? `${base}-error` : undefined}
+                        />
+                      </div>
+                      {/* A 48px control, so it is a real target on a tablet.
+                          The cross is decoration; the label is the sentence. */}
+                      <button
+                        type="button"
+                        className={`${SECONDARY_BUTTON} size-12 shrink-0 px-0 text-lg`}
+                        aria-label={t('catalog.removeAttribute')}
+                        onClick={() => removeAttribute(variantIndex, attributeIndex)}
+                      >
+                        <span aria-hidden="true">&times;</span>
+                      </button>
+                    </div>
+                    {error && (
+                      <p id={`${base}-error`} className={FIELD_ERROR}>
+                        {t(error)}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+
+              <div>
                 <button
                   type="button"
-                  className={SECONDARY_BUTTON}
-                  onClick={() => removeVariant(variantIndex)}
+                  className={QUIET_BUTTON}
+                  onClick={() => addAttribute(variantIndex)}
                 >
-                  {t('catalog.removeVariant', { number: variantIndex + 1 })}
+                  {t('catalog.addAttribute')}
                 </button>
-              )}
+              </div>
             </div>
+          ))}
 
-            {fieldErrors.variants?.[String(variantIndex)] && (
-              <p role="alert" className="text-red-800">
-                {t('catalog.duplicateVariant')}
-              </p>
-            )}
-
-            {variant.attributes.map((attribute, attributeIndex) => {
-              const error = attributeError(variantIndex, attributeIndex);
-              const base = `new-product-v${variantIndex}-a${attributeIndex}`;
-              return (
-                <div key={attributeIndex} className="flex flex-col gap-1">
-                  <div className="flex flex-wrap items-end gap-2">
-                    <div className="flex min-w-40 flex-1 flex-col gap-1">
-                      <label htmlFor={`${base}-name`} className="text-sm font-medium">
-                        {t('catalog.attributeName')}
-                      </label>
-                      <input
-                        id={`${base}-name`}
-                        type="text"
-                        autoComplete="off"
-                        maxLength={ATTRIBUTE_NAME_MAX_LENGTH}
-                        className={TEXT_INPUT}
-                        value={attribute.name}
-                        onChange={(event) =>
-                          updateAttribute(variantIndex, attributeIndex, {
-                            name: event.target.value,
-                          })
-                        }
-                        aria-invalid={error ? true : undefined}
-                        aria-describedby={error ? `${base}-error` : undefined}
-                      />
-                    </div>
-                    <div className="flex min-w-40 flex-1 flex-col gap-1">
-                      <label htmlFor={`${base}-value`} className="text-sm font-medium">
-                        {t('catalog.attributeValue')}
-                      </label>
-                      <input
-                        id={`${base}-value`}
-                        type="text"
-                        autoComplete="off"
-                        maxLength={ATTRIBUTE_VALUE_MAX_LENGTH}
-                        className={TEXT_INPUT}
-                        value={attribute.value}
-                        onChange={(event) =>
-                          updateAttribute(variantIndex, attributeIndex, {
-                            value: event.target.value,
-                          })
-                        }
-                        aria-invalid={error ? true : undefined}
-                        aria-describedby={error ? `${base}-error` : undefined}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className={SECONDARY_BUTTON}
-                      onClick={() => removeAttribute(variantIndex, attributeIndex)}
-                    >
-                      {t('catalog.removeAttribute')}
-                    </button>
-                  </div>
-                  {error && (
-                    <p id={`${base}-error`} className="text-red-800">
-                      {t(error)}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-
-            <div>
-              <button
-                type="button"
-                className={SECONDARY_BUTTON}
-                onClick={() => addAttribute(variantIndex)}
-              >
-                {t('catalog.addAttribute')}
-              </button>
-            </div>
+          {/* After the variants rather than beside the legend: "add another"
+              belongs at the end of the list it adds to, and it reads the same
+              way as the add-an-attribute action inside each card. */}
+          <div>
+            <button type="button" className={QUIET_BUTTON} onClick={addVariant}>
+              {t('catalog.addVariant')}
+            </button>
           </div>
-        ))}
+        </fieldset>
 
-        <div>
-          <button type="button" className={SECONDARY_BUTTON} onClick={addVariant}>
-            {t('catalog.addVariant')}
+        <div className="flex flex-wrap gap-2.5 border-t border-rule pt-4.5">
+          <button
+            type="submit"
+            className={submit.isPending ? PRIMARY_BUTTON_BUSY : PRIMARY_BUTTON}
+            disabled={submit.isPending}
+            aria-busy={submit.isPending}
+          >
+            {submit.isPending && (
+              <span
+                aria-hidden="true"
+                className="mr-2.5 inline-block size-3.5 animate-spin rounded-full border-2 border-white/45 border-t-white motion-reduce:animate-none"
+              />
+            )}
+            {submit.isPending ? t('catalog.submitting') : t('catalog.submit')}
+          </button>
+          <button
+            type="button"
+            className={SECONDARY_BUTTON}
+            onClick={onCancel}
+            disabled={submit.isPending}
+          >
+            {t('action.cancel')}
           </button>
         </div>
-      </fieldset>
+      </form>
 
-      <div className="flex flex-wrap gap-2">
-        <button type="submit" className={PRIMARY_BUTTON} disabled={submit.isPending}>
-          {submit.isPending ? t('catalog.submitting') : t('catalog.submit')}
-        </button>
-        <button
-          type="button"
-          className={SECONDARY_BUTTON}
-          onClick={onCancel}
-          disabled={submit.isPending}
-        >
-          {t('action.cancel')}
-        </button>
+      <CreationSummary values={values} />
+    </div>
+  );
+}
+
+/**
+ * A quiet action inside the form: adding a variant, adding an attribute,
+ * removing one. Accent text on nothing, because a form with five bordered
+ * buttons in it reads as five decisions of equal weight, and only one of them
+ * is "create the product".
+ */
+const QUIET_BUTTON =
+  'inline-flex min-h-11 items-center rounded-md px-2.5 text-[15px] font-semibold text-accent ' +
+  'hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-offset-2 ' +
+  'focus-visible:outline-accent-focus';
+
+/**
+ * What this form will create, restated beside it.
+ *
+ * Only what has been typed — no field the form does not have, and no SKU. The
+ * SKU box is here precisely to say that the SKU is not a decision anybody makes
+ * on this screen: the catalog generates it, and somebody hunting for the field
+ * to type one into should find this sentence instead.
+ *
+ * The last line is the one that matters after a dropped connection. This route
+ * carries no operation id and no name is unique, so a second attempt is a
+ * second product — the safe move is to go and look at the list.
+ */
+function CreationSummary({ values }: { values: NewProductFormValues }) {
+  const t = useTranslator();
+  const name = values.name.trim();
+
+  return (
+    <aside className={`${PANEL} flex flex-col gap-3`} aria-label={t('catalog.preview')}>
+      <p className="text-xs font-bold tracking-[0.1em] text-accent uppercase">
+        {t('catalog.preview')}
+      </p>
+
+      <div>
+        {name === '' ? (
+          <p className="text-[15px] text-ink-soft">{t('catalog.previewNoName')}</p>
+        ) : (
+          <p className="text-lg font-semibold text-ink">{name}</p>
+        )}
+
+        <ul className="mt-0.5 flex flex-col">
+          {values.variants.map((variant, index) => {
+            const attributes = formatVariantAttributes(
+              variant.attributes.filter(
+                (attribute) => attribute.name.trim() !== '' && attribute.value.trim() !== '',
+              ),
+            );
+            return (
+              <li
+                key={index}
+                className={attributes === '' ? 'text-[15px] text-ink-soft' : 'text-[15px] text-ink'}
+              >
+                {attributes === '' ? t('catalog.noAttributes') : attributes}
+              </li>
+            );
+          })}
+        </ul>
       </div>
-    </form>
+
+      <div className="flex flex-col gap-1 rounded-md border border-line bg-canvas p-3">
+        <span className="text-xs font-bold tracking-[0.08em] text-ink-muted uppercase">
+          {t('catalog.sku')}
+        </span>
+        <span className="text-[15px] text-ink-soft">{t('catalog.skuServerGenerated')}</span>
+      </div>
+
+      <p className="text-sm text-pretty text-ink-soft">{t('catalog.noOperationId')}</p>
+    </aside>
   );
 }
 
