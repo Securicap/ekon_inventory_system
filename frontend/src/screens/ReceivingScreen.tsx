@@ -16,6 +16,7 @@ import {
   FIELD_LABEL,
   PANEL,
   PRIMARY_BUTTON,
+  OUTCOME_FOCUS,
   PRIMARY_BUTTON_BUSY,
   SECONDARY_BUTTON,
   TEXT_INPUT,
@@ -365,7 +366,7 @@ export function ReceivingScreen() {
       )}
 
       {phase === 'succeeded' && sent && result && (
-        <div ref={outcomeRef} tabIndex={-1}>
+        <div ref={outcomeRef} tabIndex={-1} className={OUTCOME_FOCUS}>
           <Confirmation
             quantity={sent.request.quantity}
             variantLabel={sent.variantLabel}
@@ -376,7 +377,7 @@ export function ReceivingScreen() {
       )}
 
       {phase === 'failed' && (
-        <div ref={outcomeRef} tabIndex={-1} className="flex flex-col gap-4">
+        <div ref={outcomeRef} tabIndex={-1} className={`${OUTCOME_FOCUS} flex flex-col gap-4`}>
           {/* A retryable failure is not a red error — it is "we do not know",
               and the honest instruction is to send the same thing again. A
               definitive refusal is the shared notice, unchanged. */}

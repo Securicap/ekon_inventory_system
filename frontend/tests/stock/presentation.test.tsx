@@ -191,7 +191,8 @@ describe('one presentation at a time', () => {
     await openStock({ [BALANCES_ROUTE]: json(SHELF) });
 
     expect(screen.getAllByRole('table')).toHaveLength(1);
-    expect(screen.queryAllByRole('heading', { level: 3 })).toEqual([]);
+    // The phone record list is not mounted behind it: no record heading exists.
+    expect(screen.queryAllByRole('heading', { level: 2 })).toEqual([]);
     expect(screen.getAllByText('EKN-AB12CD34')).toHaveLength(1);
   });
 });

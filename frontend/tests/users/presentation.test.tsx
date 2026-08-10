@@ -136,7 +136,7 @@ describe('while the account is being created', () => {
     expect(form()).toHaveAttribute('aria-busy', 'true');
 
     inFlight.resolve(json(createdUser(), 201));
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
   });
 
   it('keeps what was typed, so nothing has to be entered twice', async () => {
@@ -151,7 +151,7 @@ describe('while the account is being created', () => {
     expect(screen.getByLabelText(ht['users.username'])).toHaveValue('nadege.l');
 
     inFlight.resolve(json(createdUser(), 201));
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
   });
 });
 
@@ -160,13 +160,27 @@ describe('the confirmation', () => {
     await openNewUser({ [CREATE_USER_ROUTE]: json(createdUser(overrides), 201) });
     fillNewUserForm();
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
   }
+
+  /**
+   * A confirmed write is announced politely, as every other one in the
+   * application is: receiving, removal, and product creation all report success
+   * through `role="status"`. This screen used to be the single outlier with an
+   * assertive `alert`, which interrupts whatever a screen reader is mid-sentence
+   * on to deliver good news that focus is already moving to.
+   */
+  it('announces success politely, not as an alert', async () => {
+    await created();
+
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 
   it('names the person, the username they will type, and the role they were given', async () => {
     await created({ username: 'nadege.l', displayName: 'Nadege Louis', role: 'MANAGER' });
 
-    const outcome = screen.getByRole('alert');
+    const outcome = screen.getByRole('status');
     expect(outcome).toHaveTextContent(ht['users.createdLabel']);
     expect(outcome).toHaveTextContent(translate('ht', 'users.success', { name: 'Nadege Louis' }));
     expect(outcome).toHaveTextContent('nadege.l');
@@ -186,7 +200,7 @@ describe('the confirmation', () => {
   it('never shows the password again, anywhere', async () => {
     await created();
 
-    expect(screen.getByRole('alert').textContent ?? '').not.toContain(PASSWORD);
+    expect(screen.getByRole('status').textContent ?? '').not.toContain(PASSWORD);
     expect(document.body.textContent ?? '').not.toContain(PASSWORD);
     expect(document.body.innerHTML).not.toContain(PASSWORD);
     expect(window.localStorage.length).toBe(0);
@@ -199,7 +213,7 @@ describe('the confirmation', () => {
     // read out over the phone.
     await created({ id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4c01' });
 
-    const outcome = screen.getByRole('alert');
+    const outcome = screen.getByRole('status');
     expect(outcome.textContent ?? '').not.toContain('0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4c01');
   });
 
@@ -225,7 +239,7 @@ describe('starting another account', () => {
 
     fillNewUserForm({ role: 'MANAGER' });
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
 
     fireEvent.click(screen.getByRole('button', { name: ht['users.createAnother'] }));
     await settle();
@@ -244,12 +258,12 @@ describe('starting another account', () => {
 
     fillNewUserForm();
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
 
     fireEvent.click(screen.getByRole('button', { name: ht['users.createAnother'] }));
     fillNewUserForm({ username: 'jean.b', displayName: 'Jean Baptiste' });
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
 
     const [first, second] = createUserRequests(api);
     expect(second).not.toEqual(first);

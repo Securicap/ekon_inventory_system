@@ -13,6 +13,7 @@ import {
   FIELD_ERROR,
   FIELD_HINT,
   FIELD_LABEL,
+  OUTCOME_FOCUS,
   PANEL,
   PRIMARY_BUTTON,
   PRIMARY_BUTTON_BUSY,
@@ -216,12 +217,12 @@ export function NewProductForm({
         className={`${PANEL} flex flex-col gap-4.5`}
       >
         <div>
-          <h3 className="text-lg font-semibold text-ink">{t('catalog.newProductTitle')}</h3>
+          <h2 className="text-lg font-semibold text-ink">{t('catalog.newProductTitle')}</h2>
           <p className="mt-1 text-[15px] text-ink-soft">{t('catalog.newProductDescription')}</p>
         </div>
 
         {submit.isError && (
-          <div ref={outcomeRef} tabIndex={-1}>
+          <div ref={outcomeRef} tabIndex={-1} className={OUTCOME_FOCUS}>
             {isUncertain(submit.error) ? (
               <div
                 role="alert"
@@ -313,9 +314,9 @@ export function NewProductForm({
               className="flex flex-col gap-3 rounded-md border border-line bg-canvas p-4"
             >
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                <h4 className="text-[15px] font-semibold text-ink">
+                <h3 className="text-[15px] font-semibold text-ink">
                   {t('catalog.variantNumber', { number: variantIndex + 1 })}
-                </h4>
+                </h3>
                 {values.variants.length > 1 && (
                   <button
                     type="button"
@@ -460,7 +461,7 @@ export function NewProductForm({
  * is "create the product".
  */
 const QUIET_BUTTON =
-  'inline-flex min-h-11 items-center rounded-md px-2.5 text-[15px] font-semibold text-accent ' +
+  'inline-flex min-h-touch items-center rounded-md px-2.5 text-[15px] font-semibold text-accent ' +
   'hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-offset-2 ' +
   'focus-visible:outline-accent-focus';
 

@@ -22,7 +22,7 @@ export function ProductRecords({ products }: { products: readonly Product[] }) {
     <ul className="flex flex-col divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface">
       {products.map((product) => (
         <li key={product.id} className="px-4 py-3">
-          <h3 className="text-[17px] font-semibold text-ink">{product.name}</h3>
+          <h2 className="text-[17px] font-semibold text-ink">{product.name}</h2>
 
           <ul className="mt-1 flex flex-col divide-y divide-rule">
             {product.variants.map((variant) => (

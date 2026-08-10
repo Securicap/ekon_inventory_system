@@ -18,6 +18,7 @@ import {
   FIELD_ERROR,
   FIELD_HINT,
   FIELD_LABEL,
+  OUTCOME_FOCUS,
   PANEL,
   PRIMARY_BUTTON,
   PRIMARY_BUTTON_BUSY,
@@ -224,7 +225,7 @@ export function NewUserScreen() {
             className={`${PANEL} flex flex-col gap-5`}
           >
             {submit.isError && (
-              <div ref={outcomeRef} tabIndex={-1}>
+              <div ref={outcomeRef} tabIndex={-1} className={OUTCOME_FOCUS}>
                 {/* A taken username is a definitive refusal of one field, and
                     the remedy is to change that field — so it is said as its
                     own sentence rather than as the generic notice, and no
@@ -450,9 +451,10 @@ export function NewUserScreen() {
  * response and neither is something a person can act on; an id shown as
  * business data is an id somebody will eventually be asked to read out.
  *
- * `role="alert"` rather than `status`, which is what this screen has always
- * used — creating somebody's account is worth interrupting for, and the
- * existing tests hold the application to it.
+ * `role="status"`, as every other confirmed write in the application uses —
+ * receiving, removal, and product creation all report success politely. An
+ * assertive `alert` would interrupt whatever a screen reader was mid-sentence
+ * on to announce good news that focus is already moving to.
  */
 function Confirmation({ ref, user }: { ref: React.Ref<HTMLDivElement>; user: CreatedUser }) {
   const t = useTranslator();
@@ -461,8 +463,8 @@ function Confirmation({ ref, user }: { ref: React.Ref<HTMLDivElement>; user: Cre
     <div
       ref={ref}
       tabIndex={-1}
-      role="alert"
-      className="flex flex-col gap-3 rounded-lg border border-success bg-success-soft p-5"
+      role="status"
+      className={`${OUTCOME_FOCUS} flex flex-col gap-3 rounded-lg border border-success bg-success-soft p-5`}
     >
       {/* Sentences, not a colour. Somebody who cannot tell green from grey
           reads exactly the same confirmation. */}

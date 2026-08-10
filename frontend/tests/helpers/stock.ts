@@ -77,7 +77,7 @@ export function typeSearch(value: string): void {
  * The product name of every stock record on screen, in the order it is read.
  *
  * Deliberately blind to which presentation is mounted: the phone stacks its
- * records under an `h3`, and the two tables give each row a `<th scope="row">`.
+ * records under an `h2`, and the two tables give each row a `<th scope="row">`.
  * A search test cares that "Diri" is on screen and "Lwil" is not, and it should
  * not have to be rewritten because the browser is 400px wider.
  *
@@ -86,7 +86,7 @@ export function typeSearch(value: string): void {
  * name and nothing else, and falls through to its own text.
  */
 export function stockHeadings(): string[] {
-  const records = screen.queryAllByRole('heading', { level: 3 });
+  const records = screen.queryAllByRole('heading', { level: 2 });
   if (records.length > 0) return records.map((heading) => heading.textContent ?? '');
 
   return screen
@@ -99,7 +99,7 @@ export function stockHeadings(): string[] {
  * carrying that product, with every fact about it inside.
  */
 export function stockRecord(productName: string): HTMLElement {
-  const heading = screen.queryAllByRole('heading', { level: 3 });
+  const heading = screen.queryAllByRole('heading', { level: 2 });
   const record = heading.find((node) => node.textContent === productName)?.closest('li');
   if (record) return record;
 
