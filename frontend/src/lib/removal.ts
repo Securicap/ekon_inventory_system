@@ -7,7 +7,7 @@ import {
 import type { MessageKey } from '../i18n/index.js';
 import { ApiError } from './api.js';
 import { localDateTimeToIso } from './businessTime.js';
-import { formatVariantLabel } from './variants.js';
+import { formatVariantAttributes, formatVariantLabel } from './variants.js';
 
 /**
  * The parts of stock removal that are decisions rather than markup: what may be
@@ -41,6 +41,19 @@ export interface RemovableVariantChoice {
   variantId: string;
   /** Product name, attributes when there are any, and the SKU. */
   label: string;
+  /**
+   * The same three things kept apart, for the places that show a hierarchy
+   * rather than a line: the panel under the field, and the command summary.
+   *
+   * An `<option>` has one line and gets `label`; a panel has three and can say
+   * which part is the product, which the attributes, and which the shelf label
+   * somebody is holding. Both are built from the one balance read, so they
+   * cannot disagree about what was chosen.
+   */
+  productName: string;
+  /** `gwosè: 5 mamit, mak: Tchako`, or empty for a product sold one way. */
+  attributes: string;
+  sku: string;
   /** Across every active location. Zero means nothing can be removed anywhere. */
   totalQuantity: number;
   /** Every active location the server returned for this variant, in its order. */
@@ -70,6 +83,9 @@ export function removableVariantChoices(
   return balances.map((variant) => ({
     variantId: variant.variantId,
     label: formatVariantLabel(variant.productName, variant.attributes, variant.sku),
+    productName: variant.productName,
+    attributes: formatVariantAttributes(variant.attributes),
+    sku: variant.sku,
     totalQuantity: variant.totalQuantity,
     locations: variant.locations.map((location) => ({
       locationId: location.locationId,
