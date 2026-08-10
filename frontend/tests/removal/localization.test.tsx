@@ -37,14 +37,18 @@ const KEYS_ADDED_BY_REMOVAL = [
   'removal.stockHint',
   'removal.variant',
   'removal.location',
+  'removal.locationHint',
   'removal.currentQuantity',
   'removal.quantity',
+  'removal.quantityMinus',
+  'removal.quantityPlus',
   'removal.reason',
   'removal.reasonSold',
   'removal.reasonDamaged',
   'removal.reasonInternalUse',
   'removal.reasonOther',
   'removal.occurredAt',
+  'removal.occurredAtHint',
   'removal.submit',
   'removal.submitting',
   'removal.success',
@@ -53,6 +57,19 @@ const KEYS_ADDED_BY_REMOVAL = [
   'removal.retrySame',
   'removal.startNew',
   'removal.insufficientStock',
+  'removal.notChosen',
+  'removal.summaryTitle',
+  'removal.operationIdNote',
+  'removal.removedLabel',
+  'removal.remainingLabel',
+  'removal.shortfallLabel',
+  'removal.uncertainLabel',
+  'removal.uncertainHint',
+  'removal.retryTitle',
+  'removal.retryExplain',
+  'removal.retryingSame',
+  'removal.startNewTitle',
+  'removal.startNewExplain',
   'removal.noStock',
   'removal.noLocations',
   'removal.variantRequired',
@@ -71,6 +88,10 @@ const KEYS_ADDED_BY_REMOVAL = [
 const KEYS_REUSED_BY_REMOVAL = [
   'stock.noVariants',
   'status.loading',
+  'catalog.sku',
+  'catalog.noAttributes',
+  'error.network',
+  'error.requestId',
   'error.insufficientStock',
   'error.notFound',
   'error.resourceInactive',
@@ -220,6 +241,37 @@ describe('removal translations', () => {
     expect(labels.join(' ')).toContain('Diri');
     expect(labels.join(' ')).toContain('gwosè: 5 mamit');
     expect(labels.join(' ')).toContain('EKN-AB12CD34');
+  });
+
+  /**
+   * The strings that are long in French and that the layout has to survive.
+   *
+   * French runs a third longer than Creole here, and every one of these sits in
+   * a place with a hard constraint: a 344px summary panel, a button that must
+   * not wrap into two lines of a different height, or a notice on a 390px
+   * phone. They are listed rather than measured — a character count is not a
+   * layout test — so that anybody shortening the Creole to make something fit
+   * is reminded which French string is the one actually setting the width.
+   */
+  it('carries the long French wording the layout has to hold', () => {
+    for (const key of [
+      'removal.location',
+      'removal.locationHint',
+      'removal.insufficientStock',
+      'removal.uncertainHint',
+      'removal.retrySame',
+      'removal.retryingSame',
+      'removal.startNew',
+      'removal.startNewExplain',
+      'removal.removedLabel',
+      'removal.remainingLabel',
+      'removal.submitting',
+      'removal.operationIdNote',
+    ] as const) {
+      expect(fr[key]?.trim(), `fr.${key}`).toBeTruthy();
+      // Whole words, so a wrapping box has somewhere to break.
+      expect(fr[key], `fr.${key}`).not.toMatch(/\S{28,}/);
+    }
   });
 
   it('says the same things in French', () => {

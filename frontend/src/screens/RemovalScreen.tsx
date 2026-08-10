@@ -10,7 +10,18 @@ import {
 import { useAuth } from '../auth/useAuth.js';
 import { useProtectedQuery } from '../auth/useProtectedQuery.js';
 import { ErrorNotice } from '../components/ErrorNotice.js';
-import { PRIMARY_BUTTON, SECONDARY_BUTTON, TEXT_INPUT } from '../components/styles.js';
+import { PageHeader } from '../components/PageHeader.js';
+import {
+  DESTRUCTIVE_BUTTON,
+  DESTRUCTIVE_BUTTON_BUSY,
+  FIELD_ERROR,
+  FIELD_HINT,
+  FIELD_LABEL,
+  PANEL,
+  PRIMARY_BUTTON,
+  SECONDARY_BUTTON,
+  TEXT_INPUT,
+} from '../components/styles.js';
 import { useTranslator } from '../i18n/index.js';
 import { ApiError } from '../lib/api.js';
 import { localDateTimeToIso, toLocalDateTimeInputValue } from '../lib/businessTime.js';
@@ -31,6 +42,13 @@ import {
   type RemovalFieldErrors,
 } from '../lib/removal.js';
 import { removeStock } from '../lib/removalApi.js';
+import {
+  Confirmation,
+  FailureActions,
+  ShortfallNotice,
+  UncertainNotice,
+} from './removal/OutcomePanels.js';
+import { RemovalSummary } from './removal/RemovalSummary.js';
 
 /**
  * Recording stock that left: one item, one shelf, one quantity, one reason, one
@@ -78,6 +96,11 @@ type Phase = 'editing' | 'failed' | 'succeeded';
  * because by the time the answer arrives the balances may have been refetched
  * and the form reset. A confirmation has to name what was actually removed, not
  * whatever the lists say now.
+ *
+ * `request` is the snapshot a retry re-sends. It is built once, in
+ * `handleSubmit`, and is never rebuilt from the fields afterwards — which is
+ * what makes "send the same removal again" mean the same removal even though
+ * the balances underneath may have moved.
  */
 interface SentRemoval {
   request: RemoveStockRequest;
@@ -122,6 +145,17 @@ export function RemovalScreen() {
   const [sent, setSent] = useState<SentRemoval | null>(null);
   /** What the server answered. Only ever set from a response. */
   const [result, setResult] = useState<RemoveStockResponse | null>(null);
+  /**
+   * The failure that put this attempt into the failed phase, kept rather than
+   * read off the mutation.
+   *
+   * The mutation clears its own `error` the moment a retry goes pending, and
+   * this screen has to go on saying what happened *while* the retry is in
+   * flight — otherwise pressing "send the same removal again" would replace the
+   * explanation of why with a blank, and the block the person is waiting on
+   * would decide it had nothing to offer.
+   */
+  const [failure, setFailure] = useState<unknown>(null);
 
   const variantRef = useRef<HTMLSelectElement>(null);
   const locationRef = useRef<HTMLSelectElement>(null);
@@ -166,6 +200,7 @@ export function RemovalScreen() {
       // A mutation is a protected request like any other, and a 401 back from
       // one means the same thing it means on a read: the session ended.
       if (error instanceof ApiError && error.status === 401) reportSessionEnded();
+      setFailure(error);
       setPhase('failed');
 
       /**
@@ -185,6 +220,12 @@ export function RemovalScreen() {
 
   const busy = submit.isPending;
   const frozen = busy || phase !== 'editing';
+  /**
+   * A request in flight that this form started, as opposed to a resend of an
+   * attempt that already failed. Both freeze the form; only the first is the
+   * form's own progress to report.
+   */
+  const submitting = busy && phase === 'editing';
 
   /**
    * A selection that is no longer offered is dropped rather than kept.
@@ -294,10 +335,18 @@ export function RemovalScreen() {
     else if (errors.occurredAtLocal) occurredAtRef.current?.focus();
   }
 
-  /** Sends the same command again, under the same id. Nothing is rebuilt. */
+  /**
+   * Sends the same command again, under the same id. Nothing is rebuilt.
+   *
+   * The phase stays `failed` for the whole flight. This attempt has not gone
+   * back to being edited — it is the same saved removal being asked about a
+   * second time — so the explanation of what happened, and the block that
+   * offers this, stay on screen with the button marked busy. Dropping to
+   * `editing` would put the ordinary form back under somebody who is waiting to
+   * hear whether stock came off a shelf.
+   */
   function retrySameRemoval(): void {
     if (busy || !sent) return;
-    setPhase('editing');
     submit.mutate(sent.request);
   }
 
@@ -321,6 +370,7 @@ export function RemovalScreen() {
     setFieldErrors({});
     setSent(null);
     setResult(null);
+    setFailure(null);
     setPhase('editing');
     submit.reset();
   }
@@ -328,19 +378,47 @@ export function RemovalScreen() {
   const removable = choices.filter(isRemovable);
   const noLocationsAtAll =
     choices.length > 0 && choices.every((choice) => choice.locations.length === 0);
+  const choice = choices.find((candidate) => candidate.variantId === variantId);
+  const locationName =
+    locations.find((location) => location.locationId === locationId)?.locationName ?? '';
+  const reasonLabel =
+    reason === '' || !(reason in REMOVAL_REASON_LABEL_KEYS)
+      ? ''
+      : t(REMOVAL_REASON_LABEL_KEYS[reason as RemovalReason]);
+  /** The typed quantity, only when it is a whole number this ledger can hold. */
+  const typedQuantity = wholeQuantity(quantity);
+
   const describedBy = (...ids: (string | false | undefined)[]): string | undefined => {
     const present = ids.filter((id): id is string => typeof id === 'string');
     return present.length > 0 ? present.join(' ') : undefined;
   };
 
-  return (
-    <section className="flex flex-col gap-4">
-      <div>
-        <h2 className="text-xl font-medium">{t('removal.title')}</h2>
-        <p className="text-slate-600">{t('removal.description')}</p>
-      </div>
+  /**
+   * Stepping the quantity writes the same string the keyboard would write, into
+   * the same field, and is offered only when it can produce a value the form
+   * would accept — so a press can never make the field invalid, and the field
+   * is still the place a quantity is entered.
+   *
+   * The ceiling is the ledger's, not the shelf's. What the shelf holds is the
+   * last balance read and the server is the authority on it, so a stepper that
+   * stopped at that number would be a browser calculation quietly enforcing
+   * something it cannot know. Asking for more than is showing is refused by the
+   * form with a sentence, whether it was typed or stepped.
+   */
+  function step(by: 1 | -1): void {
+    if (typedQuantity === null) return;
+    setQuantity(String(typedQuantity + by));
+  }
 
-      {balances.isPending && <p className="text-slate-600">{t('status.loading')}</p>}
+  return (
+    <section className="flex flex-col gap-6">
+      <PageHeader title={t('removal.title')} subtitle={t('removal.description')} />
+
+      {balances.isPending && (
+        <p role="status" className="text-[15px] text-ink-soft">
+          {t('status.loading')}
+        </p>
+      )}
 
       {/* A 403 lands here as "you may not do this" and nothing more. It does not
           sign anybody out: they are signed in, and signing in again would
@@ -350,45 +428,47 @@ export function RemovalScreen() {
       {/* Three different empty answers, told apart. An empty catalog, a shop
           with no shelves, and a shop that has sold everything need different
           things done about them, and a blank dropdown says none of it. */}
-      {balances.data?.length === 0 && <p className="text-slate-700">{t('stock.noVariants')}</p>}
-      {noLocationsAtAll && <p className="text-slate-700">{t('removal.noLocations')}</p>}
+      {balances.data?.length === 0 && (
+        <p className="text-[15px] text-ink-soft">{t('stock.noVariants')}</p>
+      )}
+      {noLocationsAtAll && <p className="text-[15px] text-ink-soft">{t('removal.noLocations')}</p>}
       {balances.data && choices.length > 0 && !noLocationsAtAll && removable.length === 0 && (
-        <p className="text-slate-700">{t('removal.noStock')}</p>
+        <p className="text-[15px] text-ink-soft">{t('removal.noStock')}</p>
       )}
 
       {phase === 'succeeded' && sent && result && (
         <div ref={outcomeRef} tabIndex={-1}>
-          <Confirmation sent={sent} result={result} />
+          <Confirmation
+            quantity={sent.request.quantity}
+            variantLabel={sent.variantLabel}
+            locationName={sent.locationName}
+            reasonLabel={t(REMOVAL_REASON_LABEL_KEYS[sent.request.reason])}
+            result={result}
+          />
         </div>
       )}
 
       {phase === 'failed' && (
-        <div ref={outcomeRef} tabIndex={-1} className="flex flex-col gap-3">
-          <ErrorNotice error={submit.error} />
-
-          {/* A shortfall is the one refusal that needs saying twice, because
-              the second sentence is the instruction rather than the fact: the
-              numbers have moved, they have just been read again, and the way
-              forward is a corrected removal rather than the same one. */}
-          {isInsufficientStock(submit.error) && (
-            <p className="text-slate-700">{t('removal.insufficientStock')}</p>
+        <div ref={outcomeRef} tabIndex={-1} className="flex flex-col gap-4">
+          {/* Three different failures, three different sentences. A retryable
+              one is not a red error — it is "we do not know", and the honest
+              instruction is to send the same thing again. A shortfall is the
+              refusal this workflow exists to explain. Everything else is the
+              shared notice, unchanged. */}
+          {canRetryRemoval(failure) ? (
+            <UncertainNotice error={failure} />
+          ) : isInsufficientStock(failure) ? (
+            <ShortfallNotice error={failure} />
+          ) : (
+            <ErrorNotice error={failure} />
           )}
 
-          <div className="flex flex-wrap gap-2">
-            {/* Offered only when sending the same thing again could plausibly
-                work — a dropped connection or a server fault, where the outcome
-                is genuinely unknown. A shortfall, a refused permission, a gone
-                item, or a changed command will be refused identically however
-                many times it is sent. */}
-            {canRetryRemoval(submit.error) && (
-              <button type="button" className={PRIMARY_BUTTON} onClick={retrySameRemoval}>
-                {t('removal.retrySame')}
-              </button>
-            )}
-            <button type="button" className={SECONDARY_BUTTON} onClick={startNewRemoval}>
-              {t('removal.startNew')}
-            </button>
-          </div>
+          <FailureActions
+            canRetry={canRetryRemoval(failure)}
+            busy={busy}
+            onRetry={retrySameRemoval}
+            onStartNew={startNewRemoval}
+          />
         </div>
       )}
 
@@ -403,206 +483,289 @@ export function RemovalScreen() {
           onSubmit={handleSubmit}
           noValidate
           aria-busy={busy}
-          className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-white p-4 sm:p-6"
+          className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_344px]"
         >
-          <div className="flex flex-col gap-1">
-            <label htmlFor="removal-variant" className="font-medium">
-              {t('removal.variant')}
-            </label>
-            {/* The number after each name is what is on the shelf. Said once,
-                here, so the options themselves stay short enough to read on a
-                phone. */}
-            <p id="removal-variant-hint" className="text-sm text-slate-600">
-              {t('removal.stockHint')}
-            </p>
-            <select
-              id="removal-variant"
-              ref={variantRef}
-              name="variantId"
-              className={TEXT_INPUT}
-              value={variantId}
-              disabled={frozen}
-              onChange={(event) => chooseVariant(event.target.value)}
-              aria-invalid={fieldErrors.variantId ? true : undefined}
-              aria-describedby={describedBy(
-                'removal-variant-hint',
-                fieldErrors.variantId && 'removal-variant-error',
+          <div className={`${PANEL} flex flex-col gap-5`}>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="removal-variant" className={FIELD_LABEL}>
+                {t('removal.variant')}
+              </label>
+              {/* The number after each name is what is on the shelf. Said once,
+                  here, so the options themselves stay short enough to read on a
+                  phone. */}
+              <p id="removal-variant-hint" className={FIELD_HINT}>
+                {t('removal.stockHint')}
+              </p>
+              <select
+                id="removal-variant"
+                ref={variantRef}
+                name="variantId"
+                className={TEXT_INPUT}
+                value={variantId}
+                disabled={frozen}
+                onChange={(event) => chooseVariant(event.target.value)}
+                aria-invalid={fieldErrors.variantId ? true : undefined}
+                aria-describedby={describedBy(
+                  'removal-variant-hint',
+                  fieldErrors.variantId && 'removal-variant-error',
+                )}
+              >
+                <option value="">{t('removal.choose')}</option>
+                {choices.map((candidate) => (
+                  /* An item holding nothing stays in the list and cannot be
+                     chosen. Removing it would make a shop that is out of rice
+                     look like a shop that never sold rice — and the employee
+                     still needs to see that the item exists and is at zero. */
+                  <option
+                    key={candidate.variantId}
+                    value={candidate.variantId}
+                    disabled={!isRemovable(candidate)}
+                  >
+                    {candidate.label} — {candidate.totalQuantity}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.variantId && (
+                <p id="removal-variant-error" className={FIELD_ERROR}>
+                  {t(fieldErrors.variantId)}
+                </p>
               )}
-            >
-              <option value="">{t('removal.choose')}</option>
-              {choices.map((choice) => (
-                /* An item holding nothing stays in the list and cannot be
-                   chosen. Removing it would make a shop that is out of rice
-                   look like a shop that never sold rice — and the employee
-                   still needs to see that the item exists and is at zero. */
-                <option
-                  key={choice.variantId}
-                  value={choice.variantId}
-                  disabled={!isRemovable(choice)}
+
+              {/* The one line in the `<option>` broken back into the three
+                  things it is, so the hierarchy is readable without opening the
+                  list again. */}
+              {choice !== undefined && (
+                <div className="mt-1 rounded-md border-l-[3px] border-danger bg-danger-soft px-3.5 py-2.5">
+                  <p className="text-base font-semibold text-ink">{choice.productName}</p>
+                  <p className="text-sm text-ink">
+                    {choice.attributes === '' ? t('catalog.noAttributes') : choice.attributes}
+                  </p>
+                  <p className="tabular text-[13px] text-ink-soft">
+                    <span className="sr-only">{t('catalog.sku')} </span>
+                    {choice.sku}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5 border-t border-rule pt-5">
+              <label htmlFor="removal-location" className={FIELD_LABEL}>
+                {t('removal.location')}
+              </label>
+              {/* Said in words, because the label alone leaves "from" to be
+                  inferred from a verb somewhere above it. Receiving's location
+                  is where stock arrives; this one is the shelf it comes off. */}
+              <p id="removal-location-hint" className={FIELD_HINT}>
+                {t('removal.locationHint')}
+              </p>
+              <select
+                id="removal-location"
+                ref={locationRef}
+                name="locationId"
+                className={TEXT_INPUT}
+                value={locationId}
+                disabled={frozen || variantId === ''}
+                onChange={(event) => setLocationId(event.target.value)}
+                aria-invalid={fieldErrors.locationId ? true : undefined}
+                aria-describedby={describedBy(
+                  'removal-location-hint',
+                  fieldErrors.locationId && 'removal-location-error',
+                  availableQuantity !== null && 'removal-current-quantity',
+                )}
+              >
+                <option value="">{t('removal.choose')}</option>
+                {locations.map((location) => (
+                  /* Every shelf the item sits on, empty ones included and not
+                     selectable. An employee who cannot see that the Main Store
+                     is at zero will go and look for stock that is in the back. */
+                  <option
+                    key={location.locationId}
+                    value={location.locationId}
+                    disabled={!isRemovableLocation(location)}
+                  >
+                    {location.locationName} — {location.quantity}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.locationId && (
+                <p id="removal-location-error" className={FIELD_ERROR}>
+                  {t(fieldErrors.locationId)}
+                </p>
+              )}
+
+              {/* The question this screen exists to answer, said in a sentence
+                  rather than left as a number beside a dropdown. It is what the
+                  last read said, which is why it is not called "available":
+                  nobody can promise it is still true a second from now. */}
+              {availableQuantity !== null && (
+                <p
+                  id="removal-current-quantity"
+                  className="mt-1 rounded-md bg-fill px-3.5 py-2.5 text-[15px] text-ink"
                 >
-                  {choice.label} — {choice.totalQuantity}
-                </option>
-              ))}
-            </select>
-            {fieldErrors.variantId && (
-              <p id="removal-variant-error" className="text-red-800">
-                {t(fieldErrors.variantId)}
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <label htmlFor="removal-location" className="font-medium">
-              {t('removal.location')}
-            </label>
-            <select
-              id="removal-location"
-              ref={locationRef}
-              name="locationId"
-              className={TEXT_INPUT}
-              value={locationId}
-              disabled={frozen || variantId === ''}
-              onChange={(event) => setLocationId(event.target.value)}
-              aria-invalid={fieldErrors.locationId ? true : undefined}
-              aria-describedby={describedBy(
-                fieldErrors.locationId && 'removal-location-error',
-                availableQuantity !== null && 'removal-current-quantity',
+                  {t('removal.currentQuantity', { quantity: availableQuantity })}
+                </p>
               )}
-            >
-              <option value="">{t('removal.choose')}</option>
-              {locations.map((location) => (
-                /* Every shelf the item sits on, empty ones included and not
-                   selectable. An employee who cannot see that the Main Store
-                   is at zero will go and look for stock that is in the back. */
-                <option
-                  key={location.locationId}
-                  value={location.locationId}
-                  disabled={!isRemovableLocation(location)}
+            </div>
+
+            <div className="flex flex-col gap-1.5 border-t border-rule pt-5">
+              <label htmlFor="removal-quantity" className={FIELD_LABEL}>
+                {t('removal.quantity')}
+              </label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className={`${SECONDARY_BUTTON} size-12 shrink-0 px-0 text-xl`}
+                  aria-label={t('removal.quantityMinus')}
+                  disabled={frozen || typedQuantity === null || typedQuantity <= 1}
+                  onClick={() => step(-1)}
                 >
-                  {location.locationName} — {location.quantity}
-                </option>
-              ))}
-            </select>
-            {fieldErrors.locationId && (
-              <p id="removal-location-error" className="text-red-800">
-                {t(fieldErrors.locationId)}
-              </p>
-            )}
-          </div>
-
-          {/* The question this screen exists to answer, said in a sentence
-              rather than left as a number beside a dropdown. It is what the
-              last read said, which is why it is not called "available": nobody
-              can promise it is still true a second from now. */}
-          {availableQuantity !== null && (
-            <p
-              id="removal-current-quantity"
-              className="rounded-md bg-slate-100 px-3 py-2 text-slate-900"
-            >
-              {t('removal.currentQuantity', { quantity: availableQuantity })}
-            </p>
-          )}
-
-          <div className="flex flex-col gap-1">
-            <label htmlFor="removal-quantity" className="font-medium">
-              {t('removal.quantity')}
-            </label>
-            <input
-              id="removal-quantity"
-              ref={quantityRef}
-              name="quantity"
-              type="number"
-              min={1}
-              step={1}
-              max={availableQuantity ?? MAX_MOVEMENT_QUANTITY}
-              /* A phone keyboard with digits on it, at a counter, in a hurry. */
-              inputMode="numeric"
-              className={TEXT_INPUT}
-              value={quantity}
-              disabled={frozen}
-              onChange={(event) => setQuantity(event.target.value)}
-              aria-invalid={fieldErrors.quantity ? true : undefined}
-              aria-describedby={describedBy(
-                availableQuantity !== null && 'removal-current-quantity',
-                fieldErrors.quantity && 'removal-quantity-error',
+                  <span aria-hidden="true">&minus;</span>
+                </button>
+                <input
+                  id="removal-quantity"
+                  ref={quantityRef}
+                  name="quantity"
+                  type="number"
+                  min={1}
+                  step={1}
+                  max={availableQuantity ?? MAX_MOVEMENT_QUANTITY}
+                  /* A phone keyboard with digits on it, at a counter, in a hurry. */
+                  inputMode="numeric"
+                  className={`${TEXT_INPUT} tabular w-28 text-center text-xl font-bold`}
+                  value={quantity}
+                  disabled={frozen}
+                  onChange={(event) => setQuantity(event.target.value)}
+                  aria-invalid={fieldErrors.quantity ? true : undefined}
+                  aria-describedby={describedBy(
+                    availableQuantity !== null && 'removal-current-quantity',
+                    fieldErrors.quantity && 'removal-quantity-error',
+                  )}
+                />
+                <button
+                  type="button"
+                  className={`${SECONDARY_BUTTON} size-12 shrink-0 px-0 text-xl`}
+                  aria-label={t('removal.quantityPlus')}
+                  disabled={
+                    frozen || typedQuantity === null || typedQuantity >= MAX_MOVEMENT_QUANTITY
+                  }
+                  onClick={() => step(1)}
+                >
+                  <span aria-hidden="true">+</span>
+                </button>
+              </div>
+              {fieldErrors.quantity && (
+                <p id="removal-quantity-error" className={FIELD_ERROR}>
+                  {t(fieldErrors.quantity, {
+                    max: MAX_MOVEMENT_QUANTITY,
+                    quantity: availableQuantity ?? 0,
+                  })}
+                </p>
               )}
-            />
-            {fieldErrors.quantity && (
-              <p id="removal-quantity-error" className="text-red-800">
-                {t(fieldErrors.quantity, {
-                  max: MAX_MOVEMENT_QUANTITY,
-                  quantity: availableQuantity ?? 0,
-                })}
-              </p>
-            )}
+            </div>
+
+            <div className="flex flex-col gap-1.5 border-t border-rule pt-5">
+              <label htmlFor="removal-reason" className={FIELD_LABEL}>
+                {t('removal.reason')}
+              </label>
+              {/* The words are translated; the value sent is the stable code the
+                  ledger stores. An employee never reads `INTERNAL_USE`, and a
+                  report never counts "Itilize nan biznis la". */}
+              <select
+                id="removal-reason"
+                ref={reasonRef}
+                name="reason"
+                className={TEXT_INPUT}
+                value={reason}
+                disabled={frozen}
+                onChange={(event) => setReason(event.target.value)}
+                aria-invalid={fieldErrors.reason ? true : undefined}
+                aria-describedby={fieldErrors.reason ? 'removal-reason-error' : undefined}
+              >
+                <option value="">{t('removal.choose')}</option>
+                {REMOVAL_REASONS.map((code) => (
+                  <option key={code} value={code}>
+                    {t(REMOVAL_REASON_LABEL_KEYS[code])}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.reason && (
+                <p id="removal-reason-error" className={FIELD_ERROR}>
+                  {t(fieldErrors.reason)}
+                </p>
+              )}
+            </div>
+
+            {/* Lower emphasis than the item, the shelf, and the quantity: it is
+                pre-filled with now and is usually right. It is still an editable
+                business time rather than the moment the button was pressed —
+                stock counted this morning and entered this afternoon left this
+                morning. */}
+            <div className="flex flex-col gap-1.5 border-t border-rule pt-5">
+              <label htmlFor="removal-occurred-at" className={FIELD_LABEL}>
+                {t('removal.occurredAt')}
+              </label>
+              <input
+                id="removal-occurred-at"
+                ref={occurredAtRef}
+                name="occurredAt"
+                type="datetime-local"
+                className={`${TEXT_INPUT} tabular max-w-72`}
+                value={occurredAtLocal}
+                disabled={frozen}
+                onChange={(event) => setOccurredAtLocal(event.target.value)}
+                aria-invalid={fieldErrors.occurredAtLocal ? true : undefined}
+                aria-describedby={
+                  fieldErrors.occurredAtLocal
+                    ? 'removal-occurred-at-error'
+                    : 'removal-occurred-at-hint'
+                }
+              />
+              {fieldErrors.occurredAtLocal ? (
+                <p id="removal-occurred-at-error" className={FIELD_ERROR}>
+                  {t(fieldErrors.occurredAtLocal)}
+                </p>
+              ) : (
+                <p id="removal-occurred-at-hint" className={FIELD_HINT}>
+                  {t('removal.occurredAtHint')}
+                </p>
+              )}
+            </div>
           </div>
 
-          <div className="flex flex-col gap-1">
-            <label htmlFor="removal-reason" className="font-medium">
-              {t('removal.reason')}
-            </label>
-            {/* The words are translated; the value sent is the stable code the
-                ledger stores. An employee never reads `INTERNAL_USE`, and a
-                report never counts "Itilize nan biznis la". */}
-            <select
-              id="removal-reason"
-              ref={reasonRef}
-              name="reason"
-              className={TEXT_INPUT}
-              value={reason}
-              disabled={frozen}
-              onChange={(event) => setReason(event.target.value)}
-              aria-invalid={fieldErrors.reason ? true : undefined}
-              aria-describedby={fieldErrors.reason ? 'removal-reason-error' : undefined}
-            >
-              <option value="">{t('removal.choose')}</option>
-              {REMOVAL_REASONS.map((code) => (
-                <option key={code} value={code}>
-                  {t(REMOVAL_REASON_LABEL_KEYS[code])}
-                </option>
-              ))}
-            </select>
-            {fieldErrors.reason && (
-              <p id="removal-reason-error" className="text-red-800">
-                {t(fieldErrors.reason)}
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <label htmlFor="removal-occurred-at" className="font-medium">
-              {t('removal.occurredAt')}
-            </label>
-            <input
-              id="removal-occurred-at"
-              ref={occurredAtRef}
-              name="occurredAt"
-              type="datetime-local"
-              className={TEXT_INPUT}
-              value={occurredAtLocal}
-              disabled={frozen}
-              onChange={(event) => setOccurredAtLocal(event.target.value)}
-              aria-invalid={fieldErrors.occurredAtLocal ? true : undefined}
-              aria-describedby={
-                fieldErrors.occurredAtLocal ? 'removal-occurred-at-error' : undefined
-              }
-            />
-            {fieldErrors.occurredAtLocal && (
-              <p id="removal-occurred-at-error" className="text-red-800">
-                {t(fieldErrors.occurredAtLocal)}
-              </p>
-            )}
-          </div>
-
-          {/* The button says what is happening, and it is where the keyboard
-              already is when it happens, so its own name is the announcement. */}
-          <button
-            type="submit"
-            className={PRIMARY_BUTTON}
-            disabled={frozen || removable.length === 0}
+          <RemovalSummary
+            choice={choice}
+            locationName={locationName}
+            quantity={typedQuantity}
+            reasonLabel={reasonLabel}
+            occurredAtLocal={occurredAtLocal}
           >
-            {busy ? t('removal.submitting') : t('removal.submit')}
-          </button>
+            {/* The button says what is happening, and it is where the keyboard
+                already is when it happens, so its own name is the announcement.
+                A second live region beside it would say the same thing twice and
+                leave the confirmation competing with it to be read.
+
+                It reports busy only for its *own* submission. A resend belongs
+                to the block that offered it, and two buttons claiming to be
+                working on the same request is one claim too many.
+
+                Red, and it says what it does. The colour is a confirmation of
+                the sentence rather than a substitute for it: somebody who
+                cannot see it still reads "record the removal". */}
+            <button
+              type="submit"
+              className={`${submitting ? DESTRUCTIVE_BUTTON_BUSY : DESTRUCTIVE_BUTTON} min-h-touch-lg w-full text-[17px]`}
+              disabled={frozen || removable.length === 0}
+              aria-busy={submitting}
+            >
+              {submitting && (
+                <span
+                  aria-hidden="true"
+                  className="mr-2.5 inline-block size-3.5 animate-spin rounded-full border-2 border-white/45 border-t-white motion-reduce:animate-none"
+                />
+              )}
+              {submitting ? t('removal.submitting') : t('removal.submit')}
+            </button>
+          </RemovalSummary>
         </form>
       )}
     </section>
@@ -610,39 +773,18 @@ export function RemovalScreen() {
 }
 
 /**
- * What was recorded, in the terms the person used to record it.
+ * The quantity as a number, but only when it is one the ledger could hold: a
+ * whole number of units, at least one, no larger than the movement ceiling.
  *
- * The item, the shelf, how many, why, and what is left — which is the number
- * they will be asked about. Deliberately not here: the movement id, the request
- * hash, the negative delta, the quantity before, the recorded time, the
- * movement type, the actor. Those are how the ledger keeps its own promises,
- * and none of them is something an employee can act on or should have to read.
+ * Anything else is `null` — which is what the summary shows a dash for and what
+ * makes the steppers unavailable. It is a reading of the field, never a
+ * correction of it: a value the form would refuse stays on screen to be
+ * refused, rather than being quietly rounded into something else.
  */
-function Confirmation({ sent, result }: { sent: SentRemoval; result: RemoveStockResponse }) {
-  const t = useTranslator();
-
-  return (
-    <div
-      role="status"
-      className="flex flex-col gap-2 rounded-md border border-green-700 bg-green-50 px-4 py-3 text-green-900"
-    >
-      {/* A sentence, not a colour. Somebody who cannot tell green from grey
-          reads exactly the same confirmation. */}
-      <p className="font-medium">{t('removal.success', { quantity: sent.request.quantity })}</p>
-      <p>
-        {t('removal.resultingQuantity', {
-          location: sent.locationName,
-          quantity: result.quantityAfter,
-        })}
-      </p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-        <dt className="text-green-800">{t('removal.variant')}</dt>
-        <dd className="font-medium">{sent.variantLabel}</dd>
-        <dt className="text-green-800">{t('removal.location')}</dt>
-        <dd className="font-medium">{sent.locationName}</dd>
-        <dt className="text-green-800">{t('removal.reason')}</dt>
-        <dd className="font-medium">{t(REMOVAL_REASON_LABEL_KEYS[sent.request.reason])}</dd>
-      </dl>
-    </div>
-  );
+function wholeQuantity(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_MOVEMENT_QUANTITY) return null;
+  return parsed;
 }

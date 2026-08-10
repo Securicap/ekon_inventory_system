@@ -60,9 +60,21 @@ export const SECONDARY_BUTTON =
  * by colour — the restrained red is a confirmation that this button writes a
  * movement, not a warning that the application is dangerous.
  */
-export const DESTRUCTIVE_BUTTON =
-  `${BUTTON} border-danger bg-danger px-[18px] text-base font-semibold text-white ` +
-  `hover:bg-danger/90 ${DISABLED}`;
+const DESTRUCTIVE_LOOK = 'border-danger bg-danger px-[18px] text-base font-semibold text-white';
+
+export const DESTRUCTIVE_BUTTON = `${BUTTON} ${DESTRUCTIVE_LOOK} hover:bg-danger/90 ${DISABLED}`;
+
+/**
+ * The same button while its own command is in flight — `PRIMARY_BUTTON_BUSY`'s
+ * one-line equivalent, and it exists for the same reason and one more.
+ *
+ * Grey is what "you may not press this" looks like, and a removal that is *in
+ * progress* is the moment its meaning matters most: somebody waiting to hear
+ * whether stock came off a shelf must not be shown a button that has stopped
+ * looking like the button they pressed. So it keeps the danger colour, dims,
+ * and carries its own progress mark.
+ */
+export const DESTRUCTIVE_BUTTON_BUSY = `${BUTTON} ${DESTRUCTIVE_LOOK} cursor-progress opacity-75`;
 
 /**
  * A navigation destination, in the sidebar and in the mobile panel alike.
