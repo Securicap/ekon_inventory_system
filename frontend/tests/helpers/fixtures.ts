@@ -119,9 +119,14 @@ interface BalanceLocationOverrides {
  * adding a movement id to a fixture and proving the screen hides something the
  * API never sends.
  *
- * `totalQuantity` is summed from the locations rather than passed in. The
- * backend guarantees the two agree, and a fixture that let a test set them
- * apart would let the screen be tested against a response that cannot exist.
+ * `totalQuantity` is summed from the locations unless a test says otherwise.
+ * The backend guarantees the two agree, so every ordinary fixture leaves it
+ * alone — the one reason to set it is to prove that the screen *shows the
+ * server's total* rather than quietly re-adding the location quantities
+ * itself. The schema permits the two to differ (it validates each number, not
+ * the arithmetic between them), which is exactly why a screen that recomputed
+ * would go unnoticed without a fixture that can tell the two apart.
+ *
  * Defaults to one location, `Main Store`, holding nothing and never stocked —
  * the state of a fresh install.
  */
@@ -133,6 +138,8 @@ export function balanceFixture(
     sku?: string;
     attributes?: ReadonlyArray<{ name: string; value: string }>;
     locations?: readonly BalanceLocationOverrides[];
+    /** Only ever set by a test about where the total comes from. */
+    totalQuantity?: number;
   } = {},
 ): VariantStockBalance {
   const productId = overrides.productId ?? '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a01';
@@ -161,7 +168,9 @@ export function balanceFixture(
     productName: overrides.productName ?? 'Diri',
     sku: overrides.sku ?? 'EKN-AB12CD34',
     attributes: overrides.attributes ? [...overrides.attributes] : [],
-    totalQuantity: locations.reduce((total, location) => total + location.quantity, 0),
+    totalQuantity:
+      overrides.totalQuantity ??
+      locations.reduce((total, location) => total + location.quantity, 0),
     locations,
   });
 }

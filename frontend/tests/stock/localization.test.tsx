@@ -25,6 +25,10 @@ const KEYS_ADDED_BY_CURRENT_STOCK = [
   'stock.title',
   'stock.description',
   'stock.total',
+  'stock.columnItem',
+  'stock.columnLocations',
+  'stock.resultsOne',
+  'stock.results',
   'stock.searchLabel',
   'stock.searchPlaceholder',
   'stock.noVariants',
@@ -38,6 +42,9 @@ const KEYS_ADDED_BY_CURRENT_STOCK = [
 const KEYS_REUSED_BY_CURRENT_STOCK = [
   'nav.stock',
   'catalog.sku',
+  'catalog.columnProduct',
+  'catalog.columnVariant',
+  'catalog.noAttributes',
   'inventory.defaultLocation',
   'status.loading',
   'error.forbidden',
@@ -141,5 +148,45 @@ describe('current stock translations', () => {
     // A spot check that the French is French, and not the Creole copied over.
     expect(fr['stock.title']).toContain('Stock');
     expect(fr['stock.refresh']).toBe('Actualiser');
+  });
+
+  it('counts in the plural the way each language does', () => {
+    // French inflects the noun and Creole does not. "1 résultats" is the kind
+    // of small wrongness that makes software feel untrusted, and "1 rezilta /
+    // 2 rezilta" is not a mistake — it is Creole.
+    expect(fr['stock.resultsOne']).not.toBe(fr['stock.results']);
+    expect(ht['stock.resultsOne']).toBe(ht['stock.results']);
+    for (const key of ['stock.resultsOne', 'stock.results'] as const) {
+      expect(ht[key]).toContain('{count}');
+      expect(fr[key]).toContain('{count}');
+    }
+  });
+
+  it('shows the whole of a long name rather than a shortened one', async () => {
+    // Column widths are proportions, not pixel budgets sized to short Creole
+    // examples. A shelf the shop named in full is read in full — the browser
+    // wraps it, and nothing here cuts it off with an ellipsis of its own.
+    const longNames = balanceFixture({
+      productName: 'Diri blan gwo grenn ki soti nan Latibonit',
+      sku: 'EKN-AB12CD34',
+      attributes: [
+        { name: 'gwosè', value: '5 mamit' },
+        { name: 'mak', value: 'Tchako' },
+        { name: 'kalite', value: 'premye chwa' },
+      ],
+      locations: [
+        { locationName: 'Depo prensipal la nan lakou dèyè a', isDefault: true, quantity: 1234 },
+      ],
+    });
+    await openStock({ [BALANCES_ROUTE]: json([longNames]) });
+
+    expect(screen.getByText('Diri blan gwo grenn ki soti nan Latibonit')).toBeInTheDocument();
+    expect(
+      screen.getByText('gwosè: 5 mamit, mak: Tchako, kalite: premye chwa'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Depo prensipal la nan lakou dèyè a')).toBeInTheDocument();
+    // A large quantity is the digits the server sent, with no separator, no
+    // suffix, and no sign bolted on.
+    expect(screen.getByRole('definition')).toHaveTextContent('1234');
   });
 });

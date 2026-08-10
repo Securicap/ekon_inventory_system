@@ -75,7 +75,9 @@ describe('a session that ends mid-use', () => {
 
     // Read two screens, then have the session end on the third request.
     fireEvent.click(screen.getByRole('button', { name: ht['nav.stock'] }));
-    await screen.findByRole('heading', { name: 'Diri', level: 3 });
+    // Stock is a register too: one row per variant balance, named by the
+    // product it is a balance of.
+    await screen.findByRole('rowheader', { name: 'Diri' });
     fireEvent.click(screen.getByRole('button', { name: ht['nav.products'] }));
     // The catalog is a register: a product is a row-group header over its
     // variants, not a heading over a card.

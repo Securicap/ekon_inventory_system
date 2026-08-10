@@ -3,16 +3,23 @@ import { describe, expect, it } from 'vitest';
 import ht from '../../src/i18n/ht.json';
 import { json } from '../helpers/fetchMock.js';
 import { balanceFixture } from '../helpers/fixtures.js';
-import { BALANCES_ROUTE, openStock, stockHeadings } from '../helpers/stock.js';
+import {
+  BALANCES_ROUTE,
+  locationLines,
+  openStock,
+  stockHeadings,
+  stockRecord,
+} from '../helpers/stock.js';
 import { settle } from '../helpers/renderApp.js';
 
 /**
  * What an employee sees when they ask what the shop has.
  *
- * The whole question this screen answers is "what do we have, and where is
- * it?", so these tests are about a person recognizing an item and reading a
- * number — not about React state, not about the shape of the request, and never
- * about a field the ledger keeps for itself.
+ * The whole question this screen answers is "what do we have, which variant is
+ * it, where is it, and how much is there?", so these tests are about a person
+ * recognizing an item and reading a number — not about React state, not about
+ * the shape of the request, and never about a field the ledger keeps for
+ * itself.
  */
 
 const RICE = balanceFixture({
@@ -34,14 +41,6 @@ const OIL = balanceFixture({
   sku: 'EKN-Z9Y8X7W6',
   locations: [{ locationName: 'Main Store', isDefault: true, quantity: 3 }],
 });
-
-/** The card for one product, so a test reads one item rather than the page. */
-function card(productName: string): HTMLElement {
-  const heading = screen.getByRole('heading', { name: productName, level: 3 });
-  const item = heading.closest('li');
-  if (!item) throw new Error(`No stock card for ${productName}`);
-  return item;
-}
 
 describe('the stock screen', () => {
   it('reads the balances, and nothing else', async () => {
@@ -74,56 +73,69 @@ describe('the stock screen', () => {
   it('names the item the way somebody holding the box would recognize it', async () => {
     await openStock({ [BALANCES_ROUTE]: json([RICE]) });
 
-    const rice = card('Diri');
+    const rice = stockRecord('Diri');
     expect(within(rice).getByText('gwosè: 5 mamit, mak: Tchako')).toBeInTheDocument();
     expect(within(rice).getByText('EKN-AB12CD34')).toBeInTheDocument();
   });
 
-  it('shows a product with no attributes without an empty line where they would be', async () => {
+  it('says a variant has no attributes rather than leaving the cell blank', async () => {
     await openStock({ [BALANCES_ROUTE]: json([RICE, OIL]) });
 
-    const oil = card('Lwil');
+    // The same words the catalog uses for the same fact. Two spellings of "this
+    // one is sold one way" would read as two different facts.
+    const oil = stockRecord('Lwil');
+    expect(within(oil).getByText(ht['catalog.noAttributes'])).toBeInTheDocument();
     expect(within(oil).getByText('EKN-Z9Y8X7W6')).toBeInTheDocument();
-    // The SKU and the total, and no third paragraph holding nothing — the rice
-    // above has that third one because it has attributes to put in it.
-    expect(oil.querySelectorAll('p')).toHaveLength(2);
-    expect(card('Diri').querySelectorAll('p')).toHaveLength(3);
   });
 
-  it('shows the total the server sent, labelled as a total', async () => {
+  it('shows the total the server sent, in its own column', async () => {
     await openStock({ [BALANCES_ROUTE]: json([RICE]) });
 
-    const rice = card('Diri');
-    expect(within(rice).getByText(ht['stock.total'], { exact: false })).toBeInTheDocument();
-    // 5 + 12, as the backend summed it. The screen does not recompute it.
-    expect(within(rice).getByText('17')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: ht['stock.total'] })).toBeInTheDocument();
+    // 5 + 12, as the backend summed it.
+    expect(totalOf('Diri')).toBe('17');
   });
 
-  it('shows every location, with its own quantity', async () => {
+  it('shows every location, with its own quantity, inside the one record', async () => {
     await openStock({ [BALANCES_ROUTE]: json([RICE]) });
 
-    const rice = card('Diri');
-    const terms = within(rice)
-      .getAllByRole('term')
-      .map((term) => term.textContent ?? '');
-    const quantities = within(rice)
-      .getAllByRole('definition')
-      .map((definition) => definition.textContent ?? '');
+    // Two shelves, one item — not two rows that happen to sit together.
+    const lines = locationLines(stockRecord('Diri'));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.[0]).toContain('Main Store');
+    expect(lines[0]?.[1]).toBe('5');
+    expect(lines[1]?.[0]).toContain('Backroom');
+    expect(lines[1]?.[1]).toBe('12');
+  });
 
-    expect(terms[0]).toContain('Main Store');
-    expect(terms[1]).toContain('Backroom');
-    expect(quantities).toEqual(['5', '12']);
+  it('keeps the order the projection returned, with the default shelf first', async () => {
+    const reordered = balanceFixture({
+      productName: 'Diri',
+      locations: [
+        { locationName: 'Main Store', isDefault: true, quantity: 1 },
+        { locationName: 'Anba eskalye', isDefault: false, quantity: 2 },
+        { locationName: 'Backroom', isDefault: false, quantity: 3 },
+      ],
+    });
+    await openStock({ [BALANCES_ROUTE]: json([reordered]) });
+
+    // Not alphabetical: the server puts the default location first and the
+    // screen does not re-sort it for the look of the thing.
+    expect(locationLines(stockRecord('Diri')).map(([name]) => name.split(' ')[0])).toEqual([
+      'Main',
+      'Anba',
+      'Backroom',
+    ]);
   });
 
   it('marks the default location in words', async () => {
     await openStock({ [BALANCES_ROUTE]: json([RICE]) });
 
-    const rice = card('Diri');
-    const [main, backroom] = within(rice).getAllByRole('term');
+    const [main, backroom] = locationLines(stockRecord('Diri'));
     // A word, not a colour: somebody who cannot see the difference reads the
     // same marker everybody else does.
-    expect(main?.textContent).toContain(ht['inventory.defaultLocation']);
-    expect(backroom?.textContent).not.toContain(ht['inventory.defaultLocation']);
+    expect(main?.[0]).toContain(ht['inventory.defaultLocation']);
+    expect(backroom?.[0]).not.toContain(ht['inventory.defaultLocation']);
   });
 
   it('shows a location holding nothing rather than dropping it', async () => {
@@ -138,14 +150,7 @@ describe('the stock screen', () => {
     });
     await openStock({ [BALANCES_ROUTE]: json([empty]) });
 
-    const rice = card('Diri');
-    const terms = within(rice).getAllByRole('term');
-    const quantities = within(rice)
-      .getAllByRole('definition')
-      .map((definition) => definition.textContent ?? '');
-
-    expect(terms).toHaveLength(2);
-    expect(quantities).toEqual(['0', '14']);
+    expect(locationLines(stockRecord('Diri')).map(([, quantity]) => quantity)).toEqual(['0', '14']);
   });
 
   it('shows a variant nobody has ever stocked, without inventing a date', async () => {
@@ -159,13 +164,9 @@ describe('the stock screen', () => {
     });
     await openStock({ [BALANCES_ROUTE]: json([neverStocked]) });
 
-    const sugar = card('Sik');
+    const sugar = stockRecord('Sik');
     expect(within(sugar).getByText('EKN-11223344')).toBeInTheDocument();
-    expect(
-      within(sugar)
-        .getAllByRole('definition')
-        .map((definition) => definition.textContent),
-    ).toEqual(['0', '0']);
+    expect(locationLines(sugar).map(([, quantity]) => quantity)).toEqual(['0', '0']);
     // `updatedAt` is when a projection last moved, not when anybody counted.
     // A screen that filled the gap with today's date would be inventing a
     // moment nothing happened at.
@@ -175,6 +176,29 @@ describe('the stock screen', () => {
   it('shows several items at once', async () => {
     await openStock({ [BALANCES_ROUTE]: json([RICE, OIL]) });
     expect(stockHeadings()).toEqual(['Diri', 'Lwil']);
+  });
+
+  it('repeats the product name for a second variant rather than grouping it away', async () => {
+    // The projection is a flat list of variant balances with no product
+    // grouping in it, and one row is one of those records. Two sizes of rice
+    // are two rows, each with its own SKU, its own shelves, and its own total.
+    const large = balanceFixture({
+      variantId: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4af9',
+      productName: 'Diri',
+      sku: 'EKN-QR90ST12',
+      attributes: [{ name: 'gwosè', value: '25 liv' }],
+      locations: [{ locationName: 'Main Store', isDefault: true, quantity: 4 }],
+    });
+    await openStock({ [BALANCES_ROUTE]: json([RICE, large]) });
+
+    expect(stockHeadings()).toEqual(['Diri', 'Diri']);
+    expect(screen.getByText('EKN-AB12CD34')).toBeInTheDocument();
+    expect(screen.getByText('EKN-QR90ST12')).toBeInTheDocument();
+    // No row span holding the two together: a search that removed one would
+    // leave the other's grouping pointing at a row that is no longer there.
+    for (const header of screen.getAllByRole('rowheader')) {
+      expect(header.getAttribute('rowspan')).toBeNull();
+    }
   });
 
   it('shows no database identifier anywhere on the page', async () => {
@@ -195,13 +219,27 @@ describe('the stock screen', () => {
   });
 
   it('does not turn a row into a control that does nothing', async () => {
-    // There is no adjust, no removal, and no history yet. A card that looked
-    // clickable would be promising one.
+    // There is no adjust, no removal, and no history here. A row that looked
+    // clickable would be promising one — and reading stock does not imply
+    // permission to change it.
     await openStock({ [BALANCES_ROUTE]: json([RICE]) });
 
-    const rice = card('Diri');
+    const rice = stockRecord('Diri');
     expect(within(rice).queryAllByRole('button')).toEqual([]);
     expect(within(rice).queryAllByRole('link')).toEqual([]);
+    expect(within(rice).queryAllByRole('checkbox')).toEqual([]);
+    expect(within(rice).queryAllByRole('textbox')).toEqual([]);
+    // And nothing in it takes focus, because there is nothing in it to do.
+    expect(rice.querySelectorAll('[tabindex]')).toHaveLength(0);
+  });
+
+  it('offers no way into receiving or removal from a screen that only reads', async () => {
+    await openStock({ [BALANCES_ROUTE]: json([RICE]) });
+
+    const page = screen.getByRole('main');
+    for (const label of [ht['nav.receive'], ht['nav.remove'], ht['receiving.submit']]) {
+      expect(within(page).queryByRole('button', { name: label })).toBeNull();
+    }
   });
 
   it('waits for the answer rather than flashing an empty shop', async () => {
@@ -222,6 +260,7 @@ describe('a shop with nothing to show', () => {
 
     expect(await screen.findByText(ht['stock.noVariants'])).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('table')).toBeNull();
     expect(stockHeadings()).toEqual([]);
   });
 
@@ -230,13 +269,25 @@ describe('a shop with nothing to show', () => {
     await screen.findByText(ht['stock.noVariants']);
 
     expect(screen.getByLabelText(ht['stock.searchLabel'])).toBeDisabled();
-    // Not the "no results" message: nothing was searched.
+    // Not the "no results" message: nothing was searched. And no count either,
+    // because there is no list for a count to be about.
     expect(screen.queryByText(ht['stock.noMatches'])).toBeNull();
+    expect(screen.queryByText(ht['stock.results'].replace('{count}', '0'))).toBeNull();
+  });
+
+  it('points nobody at a screen their account may not open', async () => {
+    // A person may hold `inventory.read` and neither `inventory.receive` nor
+    // `inventory.remove`. An empty shop is not an invitation to book stock in.
+    await openStock({ [BALANCES_ROUTE]: json([]) });
+    await screen.findByText(ht['stock.noVariants']);
+
+    const page = screen.getByRole('main');
+    expect(within(page).queryByRole('button', { name: ht['nav.receive'] })).toBeNull();
   });
 });
 
 describe('a business with no active location', () => {
-  it('keeps the product visible and says the shelves are missing', async () => {
+  it('keeps the item visible and says the shelves are missing', async () => {
     const homeless = balanceFixture({ productName: 'Diri', locations: [] });
     expect(homeless.locations).toEqual([]);
     expect(homeless.totalQuantity).toBe(0);
@@ -244,11 +295,16 @@ describe('a business with no active location', () => {
     await openStock({ [BALANCES_ROUTE]: json([homeless]) });
 
     // The row stays. The product exists; it is the shelves that do not.
-    const rice = await screen.findByRole('heading', { name: 'Diri', level: 3 });
-    expect(rice).toBeInTheDocument();
+    expect(stockHeadings()).toEqual(['Diri']);
     expect(screen.getByText(ht['stock.noLocations'])).toBeInTheDocument();
     // And no shelf is invented to fill the space.
     expect(screen.queryAllByRole('term')).toEqual([]);
     expect(screen.queryByText(ht['inventory.defaultLocation'])).toBeNull();
   });
 });
+
+/** The Total cell of one row, addressed as the last cell rather than by its text. */
+function totalOf(productName: string): string {
+  const cells = within(stockRecord(productName)).getAllByRole('cell');
+  return cells[cells.length - 1]?.textContent ?? '';
+}
