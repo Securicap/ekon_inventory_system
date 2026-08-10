@@ -1,0 +1,52 @@
+# Ekon's public edge. The only thing on the VM that listens on the internet.
+#
+# The hostname and the ACME contact address come from production.env — no real
+# domain is committed to this repository.
+
+{
+	# Let's Encrypt uses this to warn about a certificate that failed to renew.
+	# It is the one address here that must reach a person.
+	email {$EKON_ACME_EMAIL}
+}
+
+# Naming the site is the whole of the HTTPS configuration: Caddy obtains the
+# certificate over ACME, renews it, serves HTTPS on 443, redirects http:// to
+# https:// on 80, and answers the ACME challenge on 80 as well. That is why both
+# ports are published and why nothing here mentions a certificate file.
+#
+# A request for any other hostname — a scanner on the bare IP, a stale DNS
+# record — matches no site and is refused, so it can neither be served nor
+# trigger a certificate request.
+{$EKON_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		# Only once HTTPS is confirmed working. A wrong
+		# Strict-Transport-Security is remembered by every browser that saw it,
+		# so comment this out while first pointing a domain at a new VM.
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	# TLS is terminated here and nowhere else. Fastify speaks plain HTTP on an
+	# internal Docker network and never sees the internet.
+	reverse_proxy app:8080 {
+		# The application logs every request with its own x-request-id; this
+		# lets it record where the request came from rather than the proxy.
+		header_up X-Real-IP {remote_host}
+
+		# A deploy replaces the app container while Caddy stays up. Without
+		# this, requests in that gap fail; with it they wait briefly and then
+		# succeed against the new container.
+		lb_try_duration 10s
+		lb_try_interval 500ms
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

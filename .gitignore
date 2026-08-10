@@ -11,6 +11,10 @@ backend/public/
 .env.*
 !.env.example
 
+# the OCI production candidate's real configuration: database password, domain,
+# backup bucket. `.env.*` above does not match it, so it is named explicitly.
+deploy/oci/production.env
+
 # local database / postgres scratch
 pgdata/
 *.dump

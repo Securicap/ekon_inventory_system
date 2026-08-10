@@ -14,11 +14,18 @@ environment variables, the readiness probe — lives in
 [northflank-supabase.md](northflank-supabase.md); this document stays
 provider-neutral.
 
-**Production hosting is not finalized.** Staging runs on Northflank's free
-Developer Sandbox, which is what proved the hosted workflow and not an approved
-permanent production environment. Where production runs, on which plan, and
-with what availability and backup commitments, is still an open operational
-decision.
+**Production is not declared live.** Staging runs on Northflank's free Developer
+Sandbox, which is what proved the hosted workflow and not an approved permanent
+production environment.
+
+A **zero-cost production candidate** now exists: Ekon on a single Oracle Cloud
+Always Free VM, with Caddy in front, self-hosted PostgreSQL on an attached block
+volume, and a nightly backup to Object Storage. Its tooling and runbook are in
+[oci-zero-cost.md](oci-zero-cost.md). It is a _candidate_: it earns production
+status only after every box in that document's acceptance checklist is ticked —
+deployment, backup, an off-VM copy, a passing restore drill, monitoring, and the
+launch invariant performed on the shop's own hardware. Until then no real
+inventory is entered into it.
 
 Following this document gives the business exactly this, and nothing more:
 
@@ -80,10 +87,16 @@ command", that is a setting to fill in for the service in question;
 
 ## Environments
 
-| Environment  | Purpose                                                                                  |
-| ------------ | ---------------------------------------------------------------------------------------- |
-| `staging`    | Proves migrations against a copy of production's schema before real inventory is touched |
-| `production` | The business's records                                                                   |
+| Environment          | Where                                    | Purpose                                                                                  |
+| -------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| development          | Local, and CI                            | Building and testing                                                                     |
+| `staging`            | Northflank + Supabase                    | Proves migrations against a copy of production's schema before real inventory is touched |
+| production candidate | OCI Always Free + self-hosted PostgreSQL | A validated release, deployed and being proven against the acceptance checklist          |
+| `production`         | **Not declared live**                    | The business's records                                                                   |
+
+A release moves left to right: green in CI, proven on staging, then deployed to
+the candidate by exact commit SHA. The candidate becomes production when its
+checklist passes — not when the tooling exists.
 
 ## What is already true, and what a deployment must still provide
 
@@ -308,27 +321,36 @@ is updated. If a migration must be undone, write a new forward migration.
 
 ## Backups
 
-**None of this is configured — not on staging, and there is no production
-environment yet.** It is what provisioning must set up, because the database is
-the business's only record of its inventory:
+**Nothing is configured on staging**, where the database holds no real
+inventory. On a managed platform this is provider configuration:
 
 1. the provider's automated daily backup with point-in-time recovery;
 2. a weekly `pg_dump` to object storage, in a different account from the
    database.
 
-The repository contains no backup job, no scheduled task, and no object-storage
-integration. Both of the above are provider configuration.
+For the self-hosted **production candidate** the repository does now carry a
+backup job, a schedule, and a restore drill —
+[`deploy/oci/scripts/`](../../deploy/oci/scripts/), documented in
+[oci-zero-cost.md](oci-zero-cost.md). There the backup is not provider
+configuration but part of the deployment, because there is no provider to do it:
+a nightly `pg_dump` to OCI Object Storage, a weekly copy taken off Oracle
+entirely, and a drill that restores into a disposable database.
 
 **A restore must be practised into staging before real inventory is entered, and
 at least once a year afterwards.** An untested backup is not a backup.
 
 ## When something is wrong
 
-There is **no error-monitoring service, no alerting, and no log aggregation
-configured** — the application reports to nobody, and nothing pages anyone. What
-exists is the health endpoint and the logs the process writes to stdout, read
-wherever the hosting platform collects them. Choosing and wiring up monitoring
-is its own decision and its own change.
+There is **no error-monitoring service and no log aggregation** — the
+application reports to nobody, and nothing is shipped anywhere. What exists is
+the health endpoint and the logs the process writes to stdout, read wherever the
+hosting platform collects them.
+
+The production candidate adds one thing on top of that, and it is external to
+the application: an off-host HTTPS monitor polling `/api/health` and alerting a
+real person on a non-200. It is a configuration step in
+[oci-zero-cost.md](oci-zero-cost.md), not a dependency in this repository, and no
+particular vendor is required.
 
 1. **`/api/health`** — is the database up, and is `schemaVersion` what this
    build expects? This answers "is the instance broken" without shell access.

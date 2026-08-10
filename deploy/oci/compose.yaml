@@ -1,0 +1,135 @@
+# Ekon on a single OCI Always Free VM: Caddy in front, the application behind
+# it, and PostgreSQL behind that on a private network with no published port.
+#
+# Run through `scripts/deploy.sh`, which is what derives APP_VERSION and
+# EXPECTED_SCHEMA_VERSION from the commit being deployed. Both are required
+# here and deliberately absent from `production.env`: a value an operator types
+# by hand is a value that can disagree with the build, which is exactly the
+# staging failure this deployment exists to prevent.
+#
+#   docker compose --env-file production.env -f compose.yaml <command>
+#
+# The VM is disposable. Everything that must survive it is either on the block
+# volume under /srv/ekon or in Object Storage; see docs/06-operations/oci-zero-cost.md.
+
+name: ekon
+
+services:
+  # The only service that publishes anything. It terminates TLS, obtains and
+  # renews its own certificate, and reaches the application over the internal
+  # network — the application never sees the internet directly and Fastify
+  # never terminates TLS.
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      EKON_DOMAIN: ${EKON_DOMAIN:?EKON_DOMAIN is required — see production.env.example}
+      EKON_ACME_EMAIL: ${EKON_ACME_EMAIL:?EKON_ACME_EMAIL is required — see production.env.example}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account keys. Losing these is not fatal — Caddy
+      # would obtain new ones — but it burns Let's Encrypt rate limit, so they
+      # live on the block volume with everything else that should persist.
+      - ${EKON_STATE_DIR:-/srv/ekon}/caddy/data:/data
+      - ${EKON_STATE_DIR:-/srv/ekon}/caddy/config:/config
+    networks:
+      - ekon_front
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      test: ['CMD', 'caddy', 'version']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # The repository's own root Dockerfile, built once per release and tagged with
+  # the commit it was built from. The tag is immutable on purpose: `ekon-app`
+  # with no tag, or `:latest`, is how a host ends up running something nobody
+  # can identify.
+  app:
+    image: ekon-app:${APP_VERSION:?APP_VERSION is required — run scripts/deploy.sh, do not set it by hand}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: '8080'
+      HOST: 0.0.0.0
+      # Built from the database variables rather than stored a second time, so
+      # the password exists in exactly one place in production.env. deploy.sh
+      # refuses a password that would need URL-encoding here.
+      DATABASE_URL: postgres://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      # Intentional, and only correct here: the connection never leaves the VM's
+      # private Docker network. Supabase staging stays DATABASE_SSL=true.
+      DATABASE_SSL: 'false'
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Derived by deploy.sh from the deployed commit and its bundled
+      # migrations. The application refuses to boot if the pin does not match
+      # the database, and /api/health reports the version back for verification.
+      EXPECTED_SCHEMA_VERSION: ${EXPECTED_SCHEMA_VERSION:?EXPECTED_SCHEMA_VERSION is required — run scripts/deploy.sh}
+      APP_VERSION: ${APP_VERSION}
+      DISPLAY_TIMEZONE: ${DISPLAY_TIMEZONE:-America/Port-au-Prince}
+    # `expose`, never `ports`: 8080 is reachable from Caddy over ekon_front and
+    # from nowhere else. Publishing it would put an unencrypted origin on the
+    # public internet beside the one Caddy is protecting.
+    expose:
+      - '8080'
+    networks:
+      - ekon_front
+      - ekon_back
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stop_grace_period: 20s
+
+  # No published port, on the back network only. The database is reachable from
+  # the application container and from `docker compose exec`, and from nothing
+  # else — not from the VM's public address, and not from the VM's own host
+  # network stack.
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      # The same collation development and CI use. Ordering and citext must
+      # behave identically in all three, or a comparison that passes in a test
+      # fails against real data.
+      POSTGRES_INITDB_ARGS: '--locale-provider=icu --icu-locale=en-US --encoding=UTF8'
+    volumes:
+      # A host bind mount on the attached block volume, not a Docker named
+      # volume: the data must survive `docker compose down`, a container
+      # replacement, an image rebuild, and — with the volume detached and
+      # reattached — the VM itself.
+      - ${EKON_STATE_DIR:-/srv/ekon}/postgres:/var/lib/postgresql/data
+    networks:
+      - ekon_back
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # SIGINT is PostgreSQL's fast shutdown: finish what is in flight, roll back
+    # the rest, flush, and exit. The grace period is long enough for that and
+    # short enough that a stuck shutdown is noticed.
+    stop_signal: SIGINT
+    stop_grace_period: 1m
+
+networks:
+  # Caddy and the application. Caddy is on this one and not on ekon_back, so a
+  # compromised reverse proxy still cannot open a socket to PostgreSQL.
+  ekon_front:
+    driver: bridge
+  # The application and PostgreSQL. Internal: no route to the internet at all.
+  ekon_back:
+    driver: bridge
+    internal: true
