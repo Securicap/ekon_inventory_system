@@ -21,6 +21,19 @@ const FOCUS =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-focus';
 
 /**
+ * The ring on a region that is focused by code rather than by a key press.
+ *
+ * `focus-visible` is a heuristic about *how* focus arrived, and a
+ * `tabIndex={-1}` container that a screen focuses after an answer comes back
+ * does not reliably satisfy it — so the panel takes focus with nothing drawn
+ * around it, which is exactly the moment somebody on a keyboard needs to see
+ * where they have been sent. Plain `:focus`, deliberately, and only for that
+ * case: these containers are not in the tab order, so the ring can never appear
+ * from an ordinary Tab or a mouse press.
+ */
+export const OUTCOME_FOCUS = 'focus:outline-2 focus:outline-offset-2 focus:outline-accent-focus';
+
+/**
  * A white panel on the application canvas: the one container a screen has.
  *
  * There is no card variant, no elevated variant, and no header slot. A screen

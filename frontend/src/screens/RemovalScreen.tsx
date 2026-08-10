@@ -17,6 +17,7 @@ import {
   FIELD_ERROR,
   FIELD_HINT,
   FIELD_LABEL,
+  OUTCOME_FOCUS,
   PANEL,
   PRIMARY_BUTTON,
   SECONDARY_BUTTON,
@@ -437,7 +438,7 @@ export function RemovalScreen() {
       )}
 
       {phase === 'succeeded' && sent && result && (
-        <div ref={outcomeRef} tabIndex={-1}>
+        <div ref={outcomeRef} tabIndex={-1} className={OUTCOME_FOCUS}>
           <Confirmation
             quantity={sent.request.quantity}
             variantLabel={sent.variantLabel}
@@ -449,7 +450,7 @@ export function RemovalScreen() {
       )}
 
       {phase === 'failed' && (
-        <div ref={outcomeRef} tabIndex={-1} className="flex flex-col gap-4">
+        <div ref={outcomeRef} tabIndex={-1} className={`${OUTCOME_FOCUS} flex flex-col gap-4`}>
           {/* Three different failures, three different sentences. A retryable
               one is not a red error — it is "we do not know", and the honest
               instruction is to send the same thing again. A shortfall is the

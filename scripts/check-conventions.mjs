@@ -143,10 +143,86 @@ async function checkNoHardcodedStrings() {
   }
 }
 
+/**
+ * Rule 5 — the two locale catalogues describe the same application.
+ *
+ * Every screen was translated by the PR that built it, and a key added to one
+ * catalogue and forgotten in the other is invisible until somebody reads the
+ * interface in the language it is missing from — at which point they get the
+ * other language, or a raw key. The placeholders have to match too: a message
+ * that interpolates `{count}` in Creole and nothing in French silently drops
+ * the number.
+ */
+async function checkLocaleParity() {
+  const dir = path.join(ROOT, 'frontend/src/i18n');
+  const [primary, secondary] = await Promise.all([
+    readFile(path.join(dir, 'ht.json'), 'utf8').then(JSON.parse),
+    readFile(path.join(dir, 'fr.json'), 'utf8').then(JSON.parse),
+  ]);
+
+  const placeholders = (value) =>
+    [...String(value).matchAll(/\{(\w+)\}/g)]
+      .map((m) => m[1])
+      .sort()
+      .join(',');
+
+  for (const key of Object.keys(primary)) {
+    if (!(key in secondary)) {
+      fail('locale-parity', 'frontend/src/i18n/fr.json', `missing "${key}"`);
+    } else if (placeholders(primary[key]) !== placeholders(secondary[key])) {
+      fail(
+        'locale-parity',
+        'frontend/src/i18n/fr.json',
+        `"${key}" interpolates {${placeholders(primary[key])}} in ht and ` +
+          `{${placeholders(secondary[key])}} in fr`,
+      );
+    }
+  }
+
+  for (const key of Object.keys(secondary)) {
+    if (!(key in primary)) {
+      fail('locale-parity', 'frontend/src/i18n/ht.json', `missing "${key}"`);
+    }
+  }
+}
+
+/**
+ * Rule 6 — a region that takes focus by code draws a ring when it does.
+ *
+ * Every screen that reports an outcome moves focus to it, so somebody on a
+ * keyboard lands on the answer. `focus-visible` is a heuristic about how focus
+ * arrived and does not reliably fire for a scripted `.focus()` on a
+ * `tabIndex={-1}` container, so those regions need the plain `:focus` ring that
+ * `OUTCOME_FOCUS` carries. Four of the five screens shipped without it.
+ */
+async function checkProgrammaticFocusIsVisible() {
+  const files = await walk(path.join(ROOT, 'frontend/src'), (f) => f.endsWith('.tsx'));
+
+  for (const file of files) {
+    const source = await readFile(file, 'utf8');
+    const targets = source.match(/tabIndex=\{-1\}/g)?.length ?? 0;
+    if (targets === 0) continue;
+
+    // The import specifier sits on its own line; only uses count.
+    const uses =
+      source.replace(/^\s*OUTCOME_FOCUS,\s*$/gm, '').match(/OUTCOME_FOCUS/g)?.length ?? 0;
+    if (uses < targets) {
+      fail(
+        'programmatic-focus-visible',
+        path.relative(ROOT, file),
+        `${targets} element(s) with tabIndex={-1} but ${uses} use(s) of OUTCOME_FOCUS — ` +
+          'a region focused by code must draw a ring',
+      );
+    }
+  }
+}
+
 await checkNoFloatColumns();
 await checkLedgerIsAppendOnly();
 await checkMigrationNaming();
 await checkNoHardcodedStrings();
+await checkLocaleParity();
+await checkProgrammaticFocusIsVisible();
 
 if (failures.length > 0) {
   console.error('\nConvention check failed:\n');

@@ -31,7 +31,7 @@ describe('creating an account', () => {
     fillNewUserForm();
     submitNewUserForm();
 
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
 
     const [sent, ...extras] = createUserRequests(api);
     expect(extras).toHaveLength(0);
@@ -57,7 +57,7 @@ describe('creating an account', () => {
 
     fillNewUserForm();
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
 
     const [request] = api.to(CREATE_USER_ROUTE);
     expect(request?.credentials).toBe('same-origin');
@@ -73,7 +73,7 @@ describe('creating an account', () => {
 
     fillNewUserForm({ username: '  Nadege.L  ' });
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
 
     expect(createUserRequests(api)[0]?.username).toBe('nadege.l');
   });
@@ -84,7 +84,7 @@ describe('creating an account', () => {
 
     fillNewUserForm({ password: padded });
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
 
     expect(createUserRequests(api)[0]?.password).toBe(padded);
   });
@@ -104,7 +104,7 @@ describe('creating an account', () => {
 
     fillNewUserForm({ role: 'MANAGER' });
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
 
     expect(createUserRequests(api)[0]?.role).toBe('MANAGER');
   });
@@ -148,7 +148,7 @@ describe('what the form refuses before sending', () => {
     fillNewUserForm({ username: '  NADEGE.L  ' });
     submitNewUserForm();
 
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
     expect(api.to(CREATE_USER_ROUTE)).toHaveLength(1);
   });
 
@@ -206,7 +206,7 @@ describe('the password', () => {
 
     fillNewUserForm();
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
     await settle();
 
     expect(window.localStorage.length).toBe(0);
@@ -226,7 +226,7 @@ describe('after the account is created', () => {
     fillNewUserForm();
     submitNewUserForm();
 
-    const outcome = await screen.findByRole('alert');
+    const outcome = await screen.findByRole('status');
     expect(outcome).toHaveTextContent('Nadege Louis');
     expect(outcome).toHaveTextContent('nadege.l');
   });
@@ -236,7 +236,7 @@ describe('after the account is created', () => {
 
     fillNewUserForm();
     submitNewUserForm();
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
 
     fireEvent.click(screen.getByRole('button', { name: ht['users.createAnother'] }));
 
@@ -268,7 +268,7 @@ describe('after the account is created', () => {
     expect(api.to(CREATE_USER_ROUTE)).toHaveLength(1);
 
     inFlight.resolve(json(createdUser(), 201));
-    await screen.findByRole('alert');
+    await screen.findByRole('status');
     expect(api.to(CREATE_USER_ROUTE)).toHaveLength(1);
   });
 });

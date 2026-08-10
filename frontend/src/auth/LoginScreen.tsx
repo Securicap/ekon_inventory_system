@@ -6,6 +6,7 @@ import {
   FIELD_ERROR,
   FIELD_HINT,
   FIELD_LABEL,
+  OUTCOME_FOCUS,
   PRIMARY_BUTTON,
   PRIMARY_BUTTON_BUSY,
   TEXT_INPUT,
@@ -130,9 +131,7 @@ export function LoginScreen({ sessionEnded }: { sessionEnded: boolean }) {
               ref={summaryRef}
               tabIndex={-1}
               role="alert"
-              /* Focus is moved here programmatically, which `focus-visible`
-                 does not always cover — so this ring is on plain `:focus`. */
-              className="rounded-md border border-danger bg-danger-soft px-3.5 py-3 text-[15px] font-semibold text-danger-ink focus:outline-2 focus:outline-offset-2 focus:outline-accent-focus"
+              className={`${OUTCOME_FOCUS} rounded-md border border-danger bg-danger-soft px-3.5 py-3 text-[15px] font-semibold text-danger-ink`}
             >
               {t(signInFailureMessageKey(signIn.error))}
             </div>

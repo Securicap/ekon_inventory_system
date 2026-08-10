@@ -7,8 +7,15 @@ import type { NavigationItem, View } from '../navigation.js';
 const FOCUS =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-focus';
 
+/**
+ * `min-h-touch` like every other control: this is the phone, where a thumb is
+ * doing the work, and it opens the sheet that holds sign out. The tablet rail's
+ * equivalent has always been 48px; this one was 44 and was the only interactive
+ * control in the application under the size the design system calls
+ * non-negotiable.
+ */
 const ACCOUNT_BUTTON =
-  `inline-flex min-h-11 max-w-[55%] items-center gap-1.5 rounded-md border border-line-strong ` +
+  `inline-flex min-h-touch max-w-[55%] items-center gap-1.5 rounded-md border border-line-strong ` +
   `bg-surface px-3 py-1.5 text-sm font-semibold text-ink hover:bg-fill ${FOCUS}`;
 
 /**

@@ -27,9 +27,9 @@ export function InventoryRecords({ balances }: { balances: readonly VariantStock
       {balances.map((variant) => (
         <li key={variant.variantId} className="flex flex-col gap-2 px-4 py-3">
           <div className="flex flex-col gap-0.5">
-            <h3 className="wrap-anywhere text-[17px] font-semibold text-ink">
+            <h2 className="wrap-anywhere text-[17px] font-semibold text-ink">
               {variant.productName}
-            </h3>
+            </h2>
 
             <p
               className={`wrap-anywhere text-[15px] ${
