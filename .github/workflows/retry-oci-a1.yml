@@ -1,0 +1,75 @@
+name: Retry OCI A1 Capacity
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: retry-oci-a1
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install OCI CLI
+        run: |
+          python3 -m pip install --upgrade oci-cli
+
+      - name: Configure OCI CLI
+        env:
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
+        run: |
+          mkdir -p ~/.oci
+          printf '%s\n' "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=$OCI_USER_OCID
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY_OCID
+          region=$OCI_REGION
+          key_file=$HOME/.oci/oci_api_key.pem
+          EOF
+
+          chmod 600 ~/.oci/config
+
+      - name: Choose availability domain
+        id: ad
+        run: |
+          case "$(date -u +%H)" in
+            00|03|06|09|12|15|18|21)
+              echo "value=HahX:US-ASHBURN-AD-1" >> "$GITHUB_OUTPUT"
+              ;;
+            01|04|07|10|13|16|19|22)
+              echo "value=HahX:US-ASHBURN-AD-2" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "value=HahX:US-ASHBURN-AD-3" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Update stack availability domain
+        env:
+          STACK_ID: ${{ secrets.OCI_STACK_OCID }}
+          AVAILABILITY_DOMAIN: ${{ steps.ad.outputs.value }}
+        run: |
+          oci resource-manager stack update \
+            --stack-id "$STACK_ID" \
+            --variables "{\"availability_domain\":\"$AVAILABILITY_DOMAIN\"}" \
+            --force
+
+      - name: Start Terraform apply
+        env:
+          STACK_ID: ${{ secrets.OCI_STACK_OCID }}
+        run: |
+          oci resource-manager job create-apply-job \
+            --stack-id "$STACK_ID" \
+            --execution-plan-strategy AUTO_APPROVED
