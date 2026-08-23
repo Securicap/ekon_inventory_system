@@ -5,6 +5,7 @@ import { AppError } from '../../src/platform/http/errors.js';
 import { newId } from '../../src/platform/ids/uuidv7.js';
 import { listCatalog } from '../../src/modules/catalog/infrastructure/catalogRepository.js';
 import { createCatalogService } from '../../src/modules/catalog/index.js';
+import { productRequest } from '../helpers/catalogRequests.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
 
 const NOW = new Date('2026-08-03T12:00:00.000Z');
@@ -157,7 +158,7 @@ describe('create-product transaction', () => {
 
     let thrown: unknown;
     try {
-      await service.createProduct({ name: 'Doomed', variants: [{ attributes: {} }] });
+      await service.createProduct(productRequest({ name: 'Doomed' }));
     } catch (error) {
       thrown = error;
     }
@@ -190,14 +191,19 @@ describe('list query shape', () => {
   it('lists all products without an N+1 query pattern', async () => {
     const service = createCatalogService({ pool: db.pool, clock: fixedClock(NOW) });
     for (let i = 0; i < 5; i += 1) {
-      await service.createProduct({
-        name: `Product ${i}`,
-        variants: [{ attributes: {} }, { attributes: { color: 'X' } }],
-      });
+      await service.createProduct(
+        productRequest({
+          name: `Product ${i}`,
+          variants: [{ attributes: {} }, { attributes: { color: 'X' } }],
+        }),
+      );
     }
 
-    // Count queries issued while listing: it must be a small constant (three),
-    // independent of how many products, variants, or attributes exist.
+    // Count queries issued while listing: it must be a small constant — five,
+    // now that a product also carries a brand, classifications, and barcodes —
+    // independent of how many products, variants, classifications, attributes,
+    // or barcodes exist. The brand is joined rather than looked up, so it costs
+    // no statement at all.
     let queryCount = 0;
     const counting = {
       query: (...args: unknown[]) => {
@@ -209,6 +215,6 @@ describe('list query shape', () => {
     const products = await listCatalog(counting);
     expect(products.length).toBe(5);
     expect(products.every((p) => p.variants.length === 2)).toBe(true);
-    expect(queryCount).toBe(3);
+    expect(queryCount).toBe(5);
   });
 });

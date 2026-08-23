@@ -38,4 +38,25 @@ export function registerCatalogRoutes(app: FastifyInstance, service: CatalogServ
       return reply.status(200).send(products);
     },
   );
+
+  /**
+   * What the catalog already knows — its brands, its classification dimensions
+   * and their values, and the controlled attribute names.
+   *
+   * One bounded read rather than an endpoint per vocabulary. These are three
+   * small lists wanted together by the one form that needs them, and splitting
+   * them would be three round trips to fill in one screen. It is read-only on
+   * purpose: brands and classification values are created as a side effect of
+   * entering merchandise, and attribute names are structure that grows by
+   * migration until there is a workflow to grow it — so there is nothing here
+   * for a management endpoint to manage yet.
+   */
+  app.get(
+    '/api/catalog/metadata',
+    { config: { capability: 'catalog.read' } },
+    async (_request, reply) => {
+      const metadata = await service.getMetadata();
+      return reply.status(200).send(metadata);
+    },
+  );
 }
