@@ -39,7 +39,11 @@ describe('what the form sends', () => {
     expect(extras).toHaveLength(0);
     // The simplest product in a shop: a name, and one variant with nothing on
     // it — which the contract calls the default variant.
-    expect(sent).toEqual({ name: 'Diri', variants: [{ attributes: {} }] });
+    expect(sent).toEqual({
+      name: 'Diri',
+      classifications: {},
+      variants: [{ attributes: {}, barcodes: [] }],
+    });
     // And it is a body the shared schema itself accepts, not merely one that
     // looks right: this is the same parse the route performs on arrival.
     expect(createProductRequestSchema.safeParse(sent).success).toBe(true);
@@ -58,7 +62,8 @@ describe('what the form sends', () => {
 
     expect(createProductRequests(api)[0]).toEqual({
       name: 'Diri',
-      variants: [{ attributes: { Gwosè: '5 mamit' } }],
+      classifications: {},
+      variants: [{ attributes: { Gwosè: '5 mamit' }, barcodes: [] }],
     });
   });
 
@@ -73,8 +78,8 @@ describe('what the form sends', () => {
     await screen.findByRole('status');
 
     expect(createProductRequests(api)[0]?.variants).toEqual([
-      { attributes: { gwosè: '5 mamit' } },
-      { attributes: { gwosè: '10 mamit' } },
+      { attributes: { gwosè: '5 mamit' }, barcodes: [] },
+      { attributes: { gwosè: '10 mamit' }, barcodes: [] },
     ]);
   });
 
@@ -143,9 +148,9 @@ describe('what the server owns', () => {
     await screen.findByRole('status');
 
     const sent = createProductRequests(api)[0] ?? {};
-    expect(Object.keys(sent).sort()).toEqual(['name', 'variants']);
+    expect(Object.keys(sent).sort()).toEqual(['classifications', 'name', 'variants']);
     for (const variant of sent.variants as Record<string, unknown>[]) {
-      expect(Object.keys(variant)).toEqual(['attributes']);
+      expect(Object.keys(variant).sort()).toEqual(['attributes', 'barcodes']);
     }
   });
 
@@ -244,7 +249,7 @@ describe('what the form refuses before sending', () => {
     submitNewProductForm();
     await screen.findByRole('status');
 
-    expect(createProductRequests(api)[0]?.variants).toEqual([{ attributes: {} }]);
+    expect(createProductRequests(api)[0]?.variants).toEqual([{ attributes: {}, barcodes: [] }]);
   });
 });
 

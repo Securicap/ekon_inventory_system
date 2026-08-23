@@ -158,7 +158,13 @@ describe('validateNewProductForm', () => {
 describe('toCreateProductRequest', () => {
   it('produces a body the shared contract accepts', () => {
     const request = toCreateProductRequest(form({ name: 'Diri' }));
-    expect(request).toEqual({ name: 'Diri', variants: [{ attributes: {} }] });
+    // The temporary form classifies nothing and captures no barcodes; both are
+    // spelled out because the schema defaults them, and both are real states.
+    expect(request).toEqual({
+      name: 'Diri',
+      classifications: {},
+      variants: [{ attributes: {}, barcodes: [] }],
+    });
     expect(createProductRequestSchema.safeParse(request).success).toBe(true);
   });
 
@@ -169,7 +175,7 @@ describe('toCreateProductRequest', () => {
     const request = toCreateProductRequest(
       form({ name: 'Diri', variants: [{ attributes: [{ name: 'Gwosè', value: ' 5 mamit ' }] }] }),
     );
-    expect(request.variants).toEqual([{ attributes: { Gwosè: ' 5 mamit ' } }]);
+    expect(request.variants).toEqual([{ attributes: { Gwosè: ' 5 mamit ' }, barcodes: [] }]);
   });
 
   it('drops attribute rows nobody filled in', () => {
@@ -186,7 +192,7 @@ describe('toCreateProductRequest', () => {
         ],
       }),
     );
-    expect(request.variants).toEqual([{ attributes: { gwosè: '5 mamit' } }]);
+    expect(request.variants).toEqual([{ attributes: { gwosè: '5 mamit' }, barcodes: [] }]);
   });
 
   it('omits a blank description rather than sending an empty one', () => {
@@ -205,7 +211,7 @@ describe('toCreateProductRequest', () => {
     const request = toCreateProductRequest(
       form({ name: 'Diri', variants: [{ attributes: [{ name: 'gwosè', value: '5 mamit' }] }] }),
     );
-    expect(Object.keys(request).sort()).toEqual(['name', 'variants']);
-    expect(Object.keys(request.variants[0] ?? {})).toEqual(['attributes']);
+    expect(Object.keys(request).sort()).toEqual(['classifications', 'name', 'variants']);
+    expect(Object.keys(request.variants[0] ?? {}).sort()).toEqual(['attributes', 'barcodes']);
   });
 });

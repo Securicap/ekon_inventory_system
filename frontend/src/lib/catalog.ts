@@ -174,12 +174,27 @@ export function toCreateProductRequest(values: NewProductFormValues): CreateProd
   return {
     name: values.name,
     ...(description === '' ? {} : { description: values.description }),
+    /**
+     * The temporary form captures no brand and no classification. `brand` is
+     * optional and omitted; `classifications` is spelled out empty because the
+     * schema defaults it, so the parsed request always carries the object. Both
+     * are real states — merchandise nobody has reviewed yet has neither — and
+     * neither is guessed from the product name.
+     */
+    classifications: {},
     variants: values.variants.map((variant) => ({
       attributes: Object.fromEntries(
         variant.attributes
           .filter(isFilled)
           .map((attribute) => [attribute.name, attribute.value] as const),
       ),
+      /**
+       * No barcodes, no price, no cost either. Price and cost are optional and
+       * omitted; `barcodes` is defaulted by the schema, so it is spelled out for
+       * the same reason `classifications` is. The merchandise form that captures
+       * all of this is PR 7.
+       */
+      barcodes: [],
     })),
   };
 }
