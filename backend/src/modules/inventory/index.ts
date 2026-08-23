@@ -2,7 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import type { Clock } from '../../platform/clock/index.js';
 import type { DatabasePool } from '../../platform/db/pool.js';
 import type { CatalogService } from '../catalog/index.js';
+import type { IdentityUserService } from '../identity/index.js';
 import { createLedgerService, type LedgerService } from './ledgerService.js';
+import {
+  createMovementHistoryService,
+  type MovementHistoryService,
+} from './movementHistoryService.js';
 import { createReceivingService, type ReceivingService } from './receivingService.js';
 import { createRemovalService, type RemovalService } from './removalService.js';
 import { registerInventoryRoutes } from './routes.js';
@@ -23,28 +28,50 @@ import { createInventoryService, type InventoryService } from './service.js';
  * belong to the catalog module, so receiving asks it whether one may be stocked
  * instead of reaching across the boundary into `product_variants`, and the stock
  * read asks it what is currently stockable instead of joining to `products`.
+ *
+ * The identity user service arrives the same way and for the same reason. Stock
+ * history records who posted each movement, and a screen showing one has to be
+ * able to say who — so the name is asked for, in bulk, through identity's own
+ * service. `users` is not this module's table and nothing here reads it.
  */
 export function registerInventory(
   app: FastifyInstance,
-  deps: { pool: DatabasePool; clock: Clock; catalog: CatalogService },
+  deps: {
+    pool: DatabasePool;
+    clock: Clock;
+    catalog: CatalogService;
+    identity: Pick<IdentityUserService, 'findUserDisplayNames'>;
+  },
 ): {
   inventory: InventoryService;
+  history: MovementHistoryService;
   ledger: LedgerService;
   receiving: ReceivingService;
   removal: RemovalService;
 } {
   const inventory = createInventoryService({ pool: deps.pool, catalog: deps.catalog });
+  const history = createMovementHistoryService({
+    pool: deps.pool,
+    catalog: deps.catalog,
+    identity: deps.identity,
+  });
   const ledger = createLedgerService({ pool: deps.pool, clock: deps.clock });
   const receiving = createReceivingService({ pool: deps.pool, ledger, catalog: deps.catalog });
   const removal = createRemovalService({ pool: deps.pool, ledger, catalog: deps.catalog });
 
-  registerInventoryRoutes(app, { inventory, receiving, removal });
+  registerInventoryRoutes(app, { inventory, history, receiving, removal });
 
-  return { inventory, ledger, receiving, removal };
+  return { inventory, history, ledger, receiving, removal };
 }
 
 export { createInventoryService } from './service.js';
 export type { InventoryService, InventoryServiceDeps } from './service.js';
+
+export { createMovementHistoryService } from './movementHistoryService.js';
+export type {
+  MovementHistoryService,
+  MovementHistoryServiceDeps,
+} from './movementHistoryService.js';
 
 export { createLedgerService } from './ledgerService.js';
 export type {

@@ -1,0 +1,185 @@
+import type { MovementType } from '@ekon/shared';
+import type { DatabaseClient, DatabasePool } from '../../../platform/db/pool.js';
+
+/**
+ * Reading the ledger.
+ *
+ * A separate file from `ledgerRepository.ts`, and deliberately: that one is the
+ * posting engine's persistence — every write in it takes a transaction client,
+ * and its two reads exist only to answer a replayed operation. This one holds a
+ * single bounded query that runs on the pool, takes no lock, opens no
+ * transaction, and writes nothing. Putting a paginated history query beside the
+ * insert that appends to the same table would make one file the place where
+ * both "how a movement is made" and "how the ledger is browsed" get decided.
+ *
+ * **Nothing here can write.** There is no INSERT, UPDATE, or DELETE in this
+ * file, the database refuses the last two on this table anyway (INV-1), and the
+ * convention checker fails the build on either appearing in source.
+ */
+
+/** Read-only access: the pool, or a transaction already in progress. */
+type Queryable = DatabasePool | DatabaseClient;
+
+/**
+ * One movement, straight out of the ledger. The permanent facts and nothing
+ * resolved: labelling is the service's job, and it does it in bulk.
+ *
+ * `previousMovementId` is not selected. It is the chain pointer that makes the
+ * history of a shelf unforkable (INV-4) — an integrity mechanism rather than
+ * evidence — and nothing above this layer has a use for it.
+ */
+export interface LedgerEntry {
+  id: string;
+  variantId: string;
+  locationId: string;
+  movementType: MovementType;
+  quantityDelta: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  reasonCode: string | null;
+  note: string | null;
+  operationId: string;
+  reversesMovementId: string | null;
+  userId: string;
+  occurredAt: Date;
+  recordedAt: Date;
+  /**
+   * `recorded_at` in PostgreSQL's own text form, carried alongside the `Date`.
+   *
+   * The column is `timestamptz` and holds microseconds; a JavaScript `Date`
+   * holds milliseconds. Everything this application writes goes through the
+   * injected clock and is therefore millisecond-precision already, so the two
+   * agree today — but a cursor built from the rounded value would, the first
+   * time they did not, either skip a movement or return one twice. The cursor
+   * is built from this instead, and compared as a `timestamptz` again on the
+   * way back in, so the position is exact whatever wrote the row.
+   */
+  recordedAtExact: string;
+}
+
+export interface MovementHistoryFilter {
+  variantId?: string | undefined;
+  locationId?: string | undefined;
+  movementType?: MovementType | undefined;
+  /** Inclusive bounds on `recorded_at`, the column the feed is ordered by. */
+  recordedFrom?: Date | undefined;
+  recordedTo?: Date | undefined;
+  /** Resume strictly after this position in the ledger's order. */
+  after?: { recordedAt: string; id: string } | undefined;
+  /** How many rows to return. The caller asks for one more than a page. */
+  limit: number;
+}
+
+interface MovementHistoryRow {
+  id: string;
+  variant_id: string;
+  location_id: string;
+  movement_type: MovementType;
+  quantity_delta: number;
+  quantity_before: number;
+  quantity_after: number;
+  reason_code: string | null;
+  note: string | null;
+  operation_id: string;
+  reverses_movement_id: string | null;
+  user_id: string;
+  occurred_at: Date;
+  recorded_at: Date;
+  recorded_at_exact: string;
+}
+
+/**
+ * One page of the ledger, newest recorded first.
+ *
+ * **Ordered by `recorded_at DESC, id DESC`** — the order Ekon wrote the ledger
+ * in, which is append-only and therefore never changes. Not by `occurred_at`:
+ * that is business time, it may be stated as earlier than the movement before
+ * it, and sorting by it would make the ledger's insertion order appear to
+ * rearrange itself as late entries arrived. Both timestamps are returned; only
+ * one of them is an order.
+ *
+ * `id` breaks the tie. Ids are UUIDv7 and time-ordered, so within one
+ * millisecond `id DESC` still reads newest-first, and the pair is unique
+ * because `id` is the primary key — which is what makes the keyset comparison
+ * below total rather than merely mostly-total.
+ *
+ * **Keyset pagination, not OFFSET.** `(recorded_at, id) < (…)` resumes at an
+ * exact position, so a movement posted while somebody is reading page four
+ * cannot shift a row across a page boundary and make it appear twice or not at
+ * all. An OFFSET into an append-only table that grows at the front does exactly
+ * that. It also reads one index range instead of counting past every earlier
+ * row, which is what keeps a deep page as cheap as a shallow one
+ * (`inventory_movements_recorded_at_idx`, 0011).
+ *
+ * Every filter is optional and every one narrows. There is no code path here
+ * that returns an unbounded result: `limit` is required, and the service caps
+ * it before this is called.
+ */
+export async function listMovementHistory(
+  db: Queryable,
+  filter: MovementHistoryFilter,
+): Promise<LedgerEntry[]> {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  const bind = (value: unknown): string => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+
+  if (filter.variantId !== undefined) conditions.push(`variant_id = ${bind(filter.variantId)}`);
+  if (filter.locationId !== undefined) conditions.push(`location_id = ${bind(filter.locationId)}`);
+  if (filter.movementType !== undefined) {
+    conditions.push(`movement_type = ${bind(filter.movementType)}`);
+  }
+  if (filter.recordedFrom !== undefined) {
+    conditions.push(`recorded_at >= ${bind(filter.recordedFrom)}`);
+  }
+  if (filter.recordedTo !== undefined) {
+    conditions.push(`recorded_at <= ${bind(filter.recordedTo)}`);
+  }
+  if (filter.after !== undefined) {
+    // Row-value comparison, so the pair is compared as one position rather than
+    // as two conditions that would need an OR to be correct.
+    conditions.push(
+      `(recorded_at, id) < (${bind(filter.after.recordedAt)}::timestamptz, ${bind(filter.after.id)}::uuid)`,
+    );
+  }
+
+  const where = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
+
+  const { rows } = await db.query<MovementHistoryRow>(
+    `SELECT id, variant_id, location_id, movement_type,
+            quantity_delta, quantity_before, quantity_after,
+            reason_code, note, operation_id, reverses_movement_id,
+            user_id, occurred_at, recorded_at,
+            recorded_at::text AS recorded_at_exact
+       FROM inventory_movements
+      ${where}
+      ORDER BY recorded_at DESC, id DESC
+      LIMIT ${bind(filter.limit)}`,
+    params,
+  );
+
+  return rows.map(toEntry);
+}
+
+function toEntry(row: MovementHistoryRow): LedgerEntry {
+  return {
+    id: row.id,
+    variantId: row.variant_id,
+    locationId: row.location_id,
+    movementType: row.movement_type,
+    quantityDelta: row.quantity_delta,
+    quantityBefore: row.quantity_before,
+    quantityAfter: row.quantity_after,
+    reasonCode: row.reason_code,
+    note: row.note,
+    operationId: row.operation_id,
+    reversesMovementId: row.reverses_movement_id,
+    userId: row.user_id,
+    occurredAt: row.occurred_at,
+    recordedAt: row.recorded_at,
+    recordedAtExact: row.recorded_at_exact,
+  };
+}

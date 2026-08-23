@@ -187,7 +187,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
    *
    * It also registers login, logout, and `/api/auth/me`.
    */
-  registerIdentity(app, { config, pool, clock });
+  const identity = registerIdentity(app, { config, pool, clock });
 
   /**
    * Liveness and readiness in one endpoint. Returns 503 when the database is
@@ -228,7 +228,7 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // Catalog first: the inventory module asks it whether a variant may be
   // stocked, and asks through its application service rather than its tables.
   const catalog = registerCatalog(app, { pool, clock });
-  registerInventory(app, { pool, clock, catalog });
+  registerInventory(app, { pool, clock, catalog, identity: identity.users });
 
   if (serveFrontend) {
     await registerFrontend(app, staticDir);
