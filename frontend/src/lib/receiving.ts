@@ -44,20 +44,26 @@ export interface VariantChoice {
 /**
  * The variants stock may be received against, flattened out of the catalog.
  *
- * Both flags matter and for different reasons: an inactive *product* is one the
- * business has retired, and an inactive *variant* is one size or colour of a
- * product still sold. Neither may take new stock, and the server refuses both —
- * offering one here would be offering a choice that fails at the counter.
+ * **Receiving needs `ACTIVE` at both levels, and nothing weaker.**
+ * `DISCONTINUED` merchandise is merchandise the business decided to stop
+ * buying: its remaining stock is still sold and still counted, but a delivery
+ * of it is refused by the server, so offering it here would be offering a
+ * choice that fails at the counter. `ARCHIVED` is out of operation entirely.
+ *
+ * Both levels are checked because they are different facts: a withdrawn
+ * *product* is a line the shop has stopped, and a withdrawn *variant* is one
+ * size or colour of a product it still sells. The server combines them the same
+ * way — a variant is never more available than its product — and refuses either.
  *
  * Sorted by label so the list is stable and alphabetical rather than ordered by
  * whenever somebody happened to create each product.
  */
 export function activeVariantChoices(products: ListProductsResponse): VariantChoice[] {
   return products
-    .filter((product) => product.isActive)
+    .filter((product) => product.lifecycleStatus === 'ACTIVE')
     .flatMap((product) =>
       product.variants
-        .filter((variant) => variant.isActive)
+        .filter((variant) => variant.lifecycleStatus === 'ACTIVE')
         .map((variant) => ({
           variantId: variant.id,
           label: formatVariantLabel(product.name, variant.attributes, variant.sku),

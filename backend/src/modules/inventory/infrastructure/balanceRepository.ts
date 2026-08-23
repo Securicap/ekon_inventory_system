@@ -76,3 +76,59 @@ export async function listBalancesForVariants(
     updatedAt: row.updated_at,
   }));
 }
+
+/**
+ * One variant's total on-hand quantity, summed across every location.
+ *
+ * The shape the catalog's archive check needs: it asks whether merchandise
+ * holds stock *anywhere*, not where. Which shelf it is on is an operational
+ * question and would not change the answer — archiving is refused either way.
+ */
+export interface VariantStockTotal {
+  variantId: string;
+  quantityOnHand: number;
+}
+
+/**
+ * Which of the given variants currently hold stock, and how much in total.
+ *
+ * **One statement for any number of variants**, aggregated in the database
+ * rather than by summing rows in memory: archiving a product with forty SKUs
+ * asks one question, not forty. Variants holding nothing are absent from the
+ * result — `HAVING SUM(...) > 0` — because the caller's question is "which of
+ * these block the archive", and rows of zero would be an answer it would only
+ * have to filter again.
+ *
+ * Deliberately reads the **projection** and never sums `inventory_movements`.
+ * `quantity_on_hand` is the authoritative current quantity, maintained
+ * atomically with every movement (INV-6); summing the ledger would read a
+ * moving target and would get slower for every movement the shop ever posts.
+ *
+ * Takes a transaction client rather than the pool, and that is not incidental.
+ * Its one caller is the lifecycle service's archive check, which has already
+ * locked the catalog rows this variant's writers must pass through; running
+ * this on a separate connection would answer about a different moment and the
+ * archive would be checking stock it no longer had a lock on. No pool-level
+ * variant exists, and none should.
+ */
+export async function findVariantsHoldingStock(
+  tx: DatabaseClient,
+  variantIds: string[],
+): Promise<VariantStockTotal[]> {
+  if (variantIds.length === 0) return [];
+
+  const { rows } = await tx.query<{ variant_id: string; quantity_on_hand: number }>(
+    `SELECT variant_id, SUM(quantity_on_hand)::int AS quantity_on_hand
+       FROM inventory_balances
+      WHERE variant_id = ANY($1)
+      GROUP BY variant_id
+     HAVING SUM(quantity_on_hand) > 0
+      ORDER BY variant_id`,
+    [variantIds],
+  );
+
+  return rows.map((row) => ({
+    variantId: row.variant_id,
+    quantityOnHand: row.quantity_on_hand,
+  }));
+}

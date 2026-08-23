@@ -1,9 +1,20 @@
-import type { CatalogMetadataResponse, CreateProductRequest, Money, Product } from '@ekon/shared';
+import type {
+  CatalogMetadataResponse,
+  CreateProductRequest,
+  LifecycleStatus,
+  Money,
+  Product,
+} from '@ekon/shared';
 import type { Clock } from '../../platform/clock/index.js';
 import type { DatabaseClient, DatabasePool } from '../../platform/db/pool.js';
 import { withTransaction } from '../../platform/db/unitOfWork.js';
 import { AppError, conflict } from '../../platform/http/errors.js';
 import { newId } from '../../platform/ids/uuidv7.js';
+import {
+  effectiveLifecycle,
+  merchandisePolicy,
+  type MerchandisePolicy,
+} from './domain/lifecycle.js';
 import { displayMerchandiseName, normalizeMerchandiseName } from './domain/merchandise.js';
 import { generateSku as defaultGenerateSku } from './domain/sku.js';
 import {
@@ -13,7 +24,6 @@ import {
   type NormalizedAttribute,
 } from './domain/variantSignature.js';
 import {
-  findStockableVariant,
   findVariantLabels,
   getProductById,
   insertProduct,
@@ -26,7 +36,8 @@ import {
   listCatalog,
   listClassificationDimensions,
   listDimensions,
-  listStockableVariants,
+  listOperationalVariants,
+  lockVariantLifecycle,
   resolveBrand,
   resolveClassificationValue,
   uniqueViolationConstraint,
@@ -34,8 +45,7 @@ import {
   VARIANT_SKU_UNIQUE_CONSTRAINT,
   type ClassificationAssignment,
   type DimensionRecord,
-  type StockableVariant,
-  type StockableVariantListing,
+  type OperationalVariantListing,
   type VariantLabel,
 } from './infrastructure/catalogRepository.js';
 
@@ -64,51 +74,124 @@ export interface CatalogService {
    */
   getMetadata(): Promise<CatalogMetadataResponse>;
   /**
-   * Whether a variant exists and may still be stocked. `null` when there is no
-   * such variant.
+   * May stock be **booked in** against this variant, right now, in this
+   * transaction? `null` when there is no such variant.
    *
-   * This is how the inventory module asks about a variant. It does not — and by
-   * lint rule cannot — query `product_variants` itself: the catalog owns those
-   * tables, so the question crosses the boundary as a call rather than as a
-   * join. It answers only what a stock workflow has to decide before it posts,
-   * and deliberately does not decide it: whether an unstockable variant is a
-   * `404` or a `409` is the calling workflow's rule, not the catalog's.
+   * This and its two siblings are how the inventory module asks about a
+   * variant. It does not — and by lint rule cannot — query `product_variants`
+   * itself: the catalog owns those tables, so the question crosses the boundary
+   * as a call rather than as a join.
    *
-   * The returned `isActive` is **effective stockability** — the variant and its
-   * parent product both active — and not the `product_variants.is_active`
-   * column on its own. It does **not** consult `lifecycle_status`, and the
-   * merchandise model did not change that: lifecycle is inert until PR 5.
-   * `null` still means only "no such variant".
+   * **Three questions rather than one flag, and that is the whole point.** The
+   * `isActive` this replaces could only say "available", which was enough while
+   * one boolean governed everything and is wrong now: discontinued merchandise
+   * may be sold and counted but not replenished. A workflow that asked a single
+   * question would have to interpret the answer, and receiving and removal
+   * would each be interpreting it separately. Here each workflow names what it
+   * is about to do, and the catalog answers about *that* — receiving takes
+   * `Pick<CatalogService, 'findVariantForReceiving'>` and so cannot reach the
+   * issue rule even by accident.
+   *
+   * It answers only what a stock workflow has to decide before it posts, and
+   * deliberately does not decide it: whether ineligible merchandise is a `404`
+   * or a `409` is the calling workflow's rule, not the catalog's.
+   *
+   * **It takes the caller's transaction, and it locks.** The variant and its
+   * product are read `FOR SHARE`, so a lifecycle change cannot commit between
+   * this answer and the movement it authorizes — see `lockVariantLifecycle`.
+   * That is what makes "archived merchandise never holds stock" an invariant
+   * rather than a hope.
    */
-  findStockableVariant(variantId: string): Promise<StockableVariant | null>;
+  findVariantForReceiving(
+    tx: DatabaseClient,
+    variantId: string,
+  ): Promise<MerchandiseEligibility | null>;
   /**
-   * Every variant that may currently be stocked — active variants of active
-   * products — with the product name, SKU, and attributes needed to label one.
+   * May stock be **taken off the shelf**? The counterpart to
+   * `findVariantForReceiving`, and the reason there are two.
    *
-   * The plural counterpart to `findStockableVariant`, and it exists for the same
-   * reason: the inventory module has to name what it holds stock of, and the
-   * catalog owns the tables that say so. Current stock is composed from this
-   * plus inventory's own locations and balances, in the inventory service —
-   * which is why this returns the catalog side complete and unfiltered by
+   * `DISCONTINUED` merchandise answers `permitted: true` here and `false`
+   * there. The shop stopped buying it; the units already on the shelf are still
+   * sold to real customers, and a system that refused would leave stock
+   * stranded — which does not stop it being sold, only being recorded.
+   */
+  findVariantForIssue(
+    tx: DatabaseClient,
+    variantId: string,
+  ): Promise<MerchandiseEligibility | null>;
+  /**
+   * May its recorded history be **corrected** — adjusted, or a movement
+   * reversed?
+   *
+   * A third question rather than reuse of either of the others, because a
+   * correction is about ledger truth rather than about trade. `DISCONTINUED`
+   * must not block one: discontinuing something on Friday cannot make Thursday's
+   * mis-keyed receipt permanent. `ARCHIVED` does block one, because a correction
+   * would put units back on a shelf the archive asserts is empty, behind a
+   * status that has removed the merchandise from every operational screen. The
+   * remedy is stated rather than implied: restore it, correct it, archive it
+   * again.
+   */
+  findVariantForCorrection(
+    tx: DatabaseClient,
+    variantId: string,
+  ): Promise<MerchandiseEligibility | null>;
+  /**
+   * Every variant still in day-to-day operation — `ACTIVE` or `DISCONTINUED`,
+   * at both the variant and the product level — with the product name, SKU, and
+   * attributes needed to label one.
+   *
+   * The plural counterpart to the eligibility questions, and it exists for the
+   * same reason: the inventory module has to name what it holds stock of, and
+   * the catalog owns the tables that say so. Current stock is composed from
+   * this plus inventory's own locations and balances, in the inventory service
+   * — which is why this returns the catalog side complete and unfiltered by
    * anything inventory knows, and decides nothing about stock.
+   *
+   * Discontinued merchandise **is** in this list. Replenishment stopping is not
+   * a reason to hide what is on the shelf.
    */
-  listStockableVariants(): Promise<StockableVariantListing[]>;
+  listOperationalVariants(): Promise<OperationalVariantListing[]>;
   /**
-   * Labels for a known set of variant ids, in bulk, **regardless of whether any
-   * of them may be stocked today**.
+   * Labels for a known set of variant ids, in bulk, **regardless of their
+   * lifecycle**.
    *
    * The third question the inventory module asks this one, and the first that
-   * is about the past. `listStockableVariants` answers "what can we hold stock
-   * of", which is a present-tense operational question and filters accordingly;
-   * stock history is evidence, and a movement against merchandise the shop has
-   * since retired is exactly the record somebody goes looking for. Answering
-   * history from the stockable list would silently drop it.
+   * is about the past. `listOperationalVariants` answers "what can we hold
+   * stock of", which is a present-tense operational question and filters
+   * accordingly; stock history is evidence, and a movement against merchandise
+   * the shop has since archived is exactly the record somebody goes looking
+   * for. Answering history from the operational list would silently drop it.
    *
    * An unknown id is absent from the result rather than an error. The caller
    * holds permanent ledger ids and decides what a missing label means; the
    * catalog does not get to decide that a movement is unreadable.
    */
   findVariantLabels(variantIds: string[]): Promise<VariantLabel[]>;
+}
+
+/**
+ * The catalog's answer to "may this variant take part in this operation?".
+ *
+ * One shape for all three questions, because a caller does the same three
+ * things with any of them: report `404` when there is no such variant, report a
+ * conflict naming the status when it is refused, and post when it is not.
+ *
+ * `lifecycleStatus` is the **effective** status — the stricter of the variant's
+ * own and its parent product's — because that is the one that governs, and a
+ * message naming the variant's own status while the product was the reason
+ * would send somebody to fix the wrong row. Which of the two rows said so is
+ * deliberately not reported: the remedy is the same either way, and the catalog
+ * is where that is known.
+ */
+export interface MerchandiseEligibility {
+  id: string;
+  /** The product this variant belongs to. The relationship, not a lookup. */
+  productId: string;
+  /** Effective lifecycle: the stricter of the variant's and its product's. */
+  lifecycleStatus: LifecycleStatus;
+  /** Whether the operation that was asked about is permitted in that status. */
+  permitted: boolean;
 }
 
 /** A SKU collision is astronomically unlikely; a few retries is ample and bounded. */
@@ -359,9 +442,39 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
     createProduct,
     listProducts,
     getMetadata,
-    findStockableVariant: (variantId) => findStockableVariant(pool, variantId),
-    listStockableVariants: () => listStockableVariants(pool),
+    findVariantForReceiving: (tx, variantId) =>
+      variantEligibility(tx, variantId, (policy) => policy.mayReceive),
+    findVariantForIssue: (tx, variantId) =>
+      variantEligibility(tx, variantId, (policy) => policy.mayIssue),
+    findVariantForCorrection: (tx, variantId) =>
+      variantEligibility(tx, variantId, (policy) => policy.mayCorrect),
+    listOperationalVariants: () => listOperationalVariants(pool),
     findVariantLabels: (variantIds) => findVariantLabels(pool, variantIds),
+  };
+}
+
+/**
+ * The one implementation behind all three eligibility questions.
+ *
+ * Reads and locks the two lifecycle rows once, combines them into the effective
+ * status once, and asks the policy table which the caller named. Three thin
+ * named methods over one honest lookup: the *names* keep workflows from asking
+ * the wrong question, and a single body keeps the three answers from drifting.
+ */
+async function variantEligibility(
+  tx: DatabaseClient,
+  variantId: string,
+  permits: (policy: MerchandisePolicy) => boolean,
+): Promise<MerchandiseEligibility | null> {
+  const found = await lockVariantLifecycle(tx, variantId);
+  if (!found) return null;
+
+  const lifecycleStatus = effectiveLifecycle(found.productStatus, found.variantStatus);
+  return {
+    id: found.id,
+    productId: found.productId,
+    lifecycleStatus,
+    permitted: permits(merchandisePolicy(lifecycleStatus)),
   };
 }
 

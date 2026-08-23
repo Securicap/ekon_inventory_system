@@ -268,7 +268,10 @@ describe('who the server says is asking', () => {
 describe('choices that go stale while the screen is open', () => {
   it('drops a selected variant that is no longer offered', async () => {
     const api = await openReceiving({
-      'GET /api/catalog/products': [json([RICE]), json([{ ...RICE, isActive: false }])],
+      'GET /api/catalog/products': [
+        json([RICE]),
+        json([{ ...RICE, lifecycleStatus: 'DISCONTINUED' }]),
+      ],
       [RECEIVE_ROUTE]: apiFailure('CONFLICT', 409),
     });
 

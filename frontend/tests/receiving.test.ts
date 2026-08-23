@@ -25,12 +25,20 @@ describe('which variants may be received', () => {
     expect(choices[0]?.label).toContain('Diri');
   });
 
-  it('offers nothing from a retired product', () => {
-    expect(activeVariantChoices([productFixture({ isActive: false })])).toEqual([]);
+  it('offers nothing from a withdrawn product', () => {
+    // Receiving needs `ACTIVE`, and both other statuses refuse: a discontinued
+    // line is one the business decided to stop buying, and an archived one is
+    // out of operation altogether. The server refuses either, so offering one
+    // here would be offering a choice that fails at the counter.
+    for (const lifecycleStatus of ['DISCONTINUED', 'ARCHIVED'] as const) {
+      expect(activeVariantChoices([productFixture({ lifecycleStatus })])).toEqual([]);
+    }
   });
 
-  it('offers nothing from a discontinued variant of a product still sold', () => {
-    expect(activeVariantChoices([productFixture({ variantIsActive: false })])).toEqual([]);
+  it('offers nothing from a withdrawn variant of a product still sold', () => {
+    for (const variantLifecycleStatus of ['DISCONTINUED', 'ARCHIVED'] as const) {
+      expect(activeVariantChoices([productFixture({ variantLifecycleStatus })])).toEqual([]);
+    }
   });
 
   it('sorts the choices so the list does not depend on creation order', () => {

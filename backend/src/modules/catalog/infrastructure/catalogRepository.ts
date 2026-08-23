@@ -1,6 +1,7 @@
 import type {
   Brand,
   ClassificationDimension,
+  LifecycleStatus,
   Money,
   Product,
   ProductClassification,
@@ -9,6 +10,8 @@ import type {
   VariantAttributeDefinition,
 } from '@ekon/shared';
 import type { DatabaseClient, DatabasePool } from '../../../platform/db/pool.js';
+import { AppError } from '../../../platform/http/errors.js';
+import { OPERATIONAL_LIFECYCLE_STATUSES } from '../domain/lifecycle.js';
 import type { NormalizedAttribute } from '../domain/variantSignature.js';
 
 /**
@@ -30,7 +33,6 @@ interface ProductRow {
   brand_id: string | null;
   brand_name: string | null;
   lifecycle_status: string;
-  is_active: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -40,7 +42,6 @@ interface VariantRow {
   product_id: string;
   sku: string;
   lifecycle_status: string;
-  is_active: boolean;
   /** `bigint`, parsed to a number by `platform/db/pool.ts` (INV-17). */
   selling_price_minor: number | null;
   selling_price_currency: string | null;
@@ -69,40 +70,32 @@ interface BarcodeRow {
 }
 
 /**
- * A variant, as a module that is about to move stock against it needs to see
- * it. Not a wire type: it crosses a module boundary inside the backend, never
- * the network, so it carries no timestamps, no SKU, and no attributes.
+ * The lifecycle of one variant and of the product it belongs to, as read from
+ * the two rows that carry it.
+ *
+ * Both statuses, unreduced. Combining them is
+ * `domain/lifecycle.ts`'s job — a repository that returned only the effective
+ * answer would be a repository holding business policy, and the two statuses
+ * are separately meaningful to the service that reports why something was
+ * refused.
+ *
+ * Not a wire type: it crosses a module boundary inside the backend, never the
+ * network.
  */
-export interface StockableVariant {
+export interface VariantLifecycle {
   id: string;
   /** The product this variant belongs to. The relationship, not a lookup. */
   productId: string;
-  /**
-   * **Effective stockability, not the raw `product_variants.is_active` column.**
-   *
-   * True only when the variant *and* its parent product are both active — the
-   * same rule `listStockableVariants` filters on, so what may be written and
-   * what is shown as current stock can never disagree. A caller that sees
-   * `false` knows only that stock may not move against this variant today; it
-   * is deliberately not told which of the two flags said so, because there is
-   * nothing it would do differently.
-   *
-   * **`lifecycle_status` is not consulted here, and must not be.** Merchandise
-   * lifecycle is policy about replenishment; `is_active` is the stockability
-   * bridge, and it remains the authority until PR 5 resolves the two. Reading
-   * lifecycle here would change what may be received underneath an application
-   * that has no way to set it.
-   *
-   * Neither flag is a delete: both deactivate rather than delete once there is
-   * stock history, and the ledger keeps every past movement readable.
-   */
-  isActive: boolean;
+  /** The variant's own stored status. */
+  variantStatus: LifecycleStatus;
+  /** Its parent product's, which is a ceiling on it. */
+  productStatus: LifecycleStatus;
 }
 
 /**
- * A variant that may currently be stocked, as a module presenting stock needs
- * to label it: the identity, the product it belongs to, its SKU, and the
- * attributes that tell two variants of one product apart.
+ * A variant that is still part of day-to-day operations, as a module presenting
+ * stock needs to label it: the identity, the product it belongs to, its SKU,
+ * and the attributes that tell two variants of one product apart.
  *
  * Deliberately unchanged by the merchandise model. Price, cost, brand, and
  * classification are merchandise facts, and the stock view has no consumer for
@@ -112,7 +105,7 @@ export interface StockableVariant {
  * Not a wire type either. It crosses a module boundary inside the backend; the
  * module that presents it owns the mapping to whatever crosses the network.
  */
-export interface StockableVariantListing {
+export interface OperationalVariantListing {
   id: string;
   productId: string;
   /** The parent product's name. The relationship resolved, not a lookup. */
@@ -126,16 +119,16 @@ export interface StockableVariantListing {
  * A variant as **history** needs to name it, which is not the same question as
  * what may be stocked.
  *
- * `StockableVariantListing` answers "what can we hold stock of today" and
+ * `OperationalVariantListing` answers "what can we hold stock of today" and
  * therefore filters to active merchandise under active products. Evidence has
  * no business being filtered that way: a movement posted last year against a
  * variant the shop has since retired is exactly the record somebody goes
  * looking for, and a history that quietly omitted it would be worse than one
  * that refused to load.
  *
- * So this resolves any variant id, whatever its lifecycle or its `is_active`,
- * and returns neither flag — a reader is being told what the merchandise *is*,
- * not whether it may be received into today.
+ * So this resolves any variant id, whatever its lifecycle, and returns no
+ * status at all — a reader is being told what the merchandise *is*, not whether
+ * it may be received into today.
  *
  * Deliberately narrow: identity, the product it belongs to, the brand, the SKU,
  * and the attributes that tell two variants apart. No price, no reference cost,
@@ -481,7 +474,7 @@ export async function insertProductClassifications(
 async function loadProducts(db: Queryable, productId?: string): Promise<Product[]> {
   const { rows: productRows } = await db.query<ProductRow>(
     `SELECT p.id, p.name, p.description, p.brand_id, b.name AS brand_name,
-            p.lifecycle_status, p.is_active, p.created_at, p.updated_at
+            p.lifecycle_status, p.created_at, p.updated_at
        FROM products p
        LEFT JOIN brands b ON b.id = p.brand_id
       ${productId === undefined ? '' : 'WHERE p.id = $1'}
@@ -503,7 +496,7 @@ async function loadProducts(db: Queryable, productId?: string): Promise<Product[
   );
 
   const { rows: variantRows } = await db.query<VariantRow>(
-    `SELECT id, product_id, sku, lifecycle_status, is_active,
+    `SELECT id, product_id, sku, lifecycle_status,
             selling_price_minor, selling_price_currency,
             reference_cost_minor, reference_cost_currency,
             created_at, updated_at
@@ -573,67 +566,108 @@ export async function getProductById(db: Queryable, id: string): Promise<Product
 }
 
 /**
- * Reads the one thing another module needs to know before it puts stock against
- * a variant: whether it exists, and whether it is still stockable.
+ * Reads the lifecycle of one variant and of its parent product, **locking both
+ * rows for the rest of the transaction**.
  *
- * Deliberately not `getProductById` — a workflow that only has to decide
- * "may I receive against this?" has no use for the product's other variants,
- * their SKUs, or anybody's attributes, and loading them would make an inventory
- * write pay for a catalog read it never looks at. One row, three columns.
+ * This is what another module calls before it moves stock. It is deliberately
+ * not `getProductById` — a workflow deciding "may I post against this?" has no
+ * use for the product's other variants, their SKUs, or anybody's attributes,
+ * and loading them would make an inventory write pay for a catalog read it
+ * never looks at. Two rows, four columns.
  *
- * **The parent product's `is_active` gates the variant here, exactly as it does
- * in `listStockableVariants`.** An active variant under a withdrawn product is
- * not stockable, and the singular lookup answering otherwise would let a write
- * land against something the plural read has already stopped showing as stock.
- * The two questions are the same question about one id and about all of them,
- * so they resolve it with the same join rather than with two rules that drift.
+ * **The lock is the point, and it is what makes archive safety real.** `FOR
+ * SHARE` on the product and the variant blocks any concurrent lifecycle change
+ * (which takes `FOR UPDATE` on the same rows) until the posting transaction
+ * commits or rolls back. So the two commands cannot cross unnoticed:
  *
- * **Neither consults `lifecycle_status`**, and this PR deliberately did not
- * change that: see `StockableVariant.isActive`.
+ *   * if the archive gets the lock first, this read waits, then sees `ARCHIVED`
+ *     and the movement is refused;
+ *   * if this posting transaction gets it first, the archive waits, and by the
+ *     time it reads the balance the new stock is committed and visible — so the
+ *     archive is refused instead.
  *
- * The join is an inner one and cannot change *whether* a row comes back:
- * `product_id` is `NOT NULL` and references `products`, so every variant has
- * exactly one parent. It changes only what `is_active` means. That matters —
- * `null` here is "no such variant", which callers answer with a `404`, and an
- * existing variant under a retired product must stay distinguishable from a
- * uuid that was never issued.
+ * Several posting transactions still run in parallel: `FOR SHARE` is shared, so
+ * two receipts against the same variant do not block each other here. They
+ * serialize later, on the balance row, exactly as they always did.
+ *
+ * **Lock order: `products` before `product_variants`, always.** Two statements
+ * rather than one join for exactly that reason — the row order a joined `FOR
+ * SHARE` takes its locks in is the planner's business, and lifecycle changes
+ * take the same two locks in this order deliberately. A path that took them the
+ * other way round would be an ABBA deadlock waiting for the first busy
+ * afternoon.
+ *
+ * The join is inner and cannot change *whether* a row comes back: `product_id`
+ * is `NOT NULL` and references `products`, so every variant has exactly one
+ * parent. `null` here means "no such variant", which callers answer with a
+ * `404`, and an existing variant of withdrawn merchandise must stay
+ * distinguishable from a uuid that was never issued.
  */
-export async function findStockableVariant(
-  db: Queryable,
+export async function lockVariantLifecycle(
+  tx: DatabaseClient,
   variantId: string,
-): Promise<StockableVariant | null> {
-  const { rows } = await db.query<{ id: string; product_id: string; is_active: boolean }>(
-    `SELECT v.id, v.product_id, (v.is_active AND p.is_active) AS is_active
-       FROM product_variants v
-       JOIN products p ON p.id = v.product_id
-      WHERE v.id = $1`,
+): Promise<VariantLifecycle | null> {
+  const { rows: productRows } = await tx.query<{ id: string; lifecycle_status: string }>(
+    `SELECT p.id, p.lifecycle_status
+       FROM products p
+       JOIN product_variants v ON v.product_id = p.id
+      WHERE v.id = $1
+        FOR SHARE OF p`,
     [variantId],
   );
-  const row = rows[0];
-  return row ? { id: row.id, productId: row.product_id, isActive: row.is_active } : null;
+  const product = productRows[0];
+  if (!product) return null;
+
+  const { rows: variantRows } = await tx.query<{ id: string; lifecycle_status: string }>(
+    `SELECT id, lifecycle_status
+       FROM product_variants
+      WHERE id = $1
+        FOR SHARE`,
+    [variantId],
+  );
+  const variant = variantRows[0];
+  // Unreachable: the product row above was found through this very variant, and
+  // catalog rows carrying history are never deleted (INV-12).
+  if (!variant) return null;
+
+  return {
+    id: variant.id,
+    productId: product.id,
+    variantStatus: toLifecycle(variant.lifecycle_status),
+    productStatus: toLifecycle(product.lifecycle_status),
+  };
 }
 
 /**
- * Every variant that may currently be stocked — active variants of active
- * products — with the product name, SKU, and attributes needed to label it.
+ * Every variant that is still part of day-to-day operations, with the product
+ * name, SKU, and attributes needed to label it.
  *
  * This is how the inventory module gets the *left-hand side* of the current
  * stock picture. It cannot query `product_variants` itself (the catalog owns
  * those tables, and the lint rule enforces it), so the question crosses the
- * boundary as a call, exactly as `findStockableVariant` does for a single id.
+ * boundary as a call.
  *
- * **A product's `is_active` gates its variants here.** An active variant under a
- * retired product is not stockable, and showing it on a stock screen would
- * present something the business has withdrawn as something it still sells. The
- * ledger history of both is untouched and stays readable — this filters a
- * present-tense operational view, it does not hide the past.
+ * **Operational means "not archived", at both levels** — which is the same rule
+ * as "the effective lifecycle is not `ARCHIVED`", because the effective status
+ * is the stricter of the two. `DISCONTINUED` merchandise is emphatically here:
+ * the shop stopped reordering it, the units on the shelf are still real, still
+ * sold, and still counted, and a current-stock screen that dropped them would
+ * strand inventory the business owns. Archived merchandise is absent, and that
+ * is only safe because archiving is refused while any stock remains.
+ *
+ * The permitted statuses are passed in from `domain/lifecycle.ts` rather than
+ * written into the SQL, so the filter and the policy cannot disagree.
+ *
+ * Ledger history of everything, archived included, is untouched and stays
+ * readable — this filters a present-tense operational view, it does not hide
+ * the past.
  *
  * Two queries regardless of catalog size, never one per variant. Ordering is
  * fixed here rather than left to the caller: product name, then SKU, then id as
  * the final tie-breaker, so two products of the same name and two variants of
  * the same product still come back in one stable order.
  */
-export async function listStockableVariants(db: Queryable): Promise<StockableVariantListing[]> {
+export async function listOperationalVariants(db: Queryable): Promise<OperationalVariantListing[]> {
   const { rows: variantRows } = await db.query<{
     id: string;
     product_id: string;
@@ -643,8 +677,9 @@ export async function listStockableVariants(db: Queryable): Promise<StockableVar
     `SELECT v.id, v.product_id, v.sku, p.name AS product_name
        FROM product_variants v
        JOIN products p ON p.id = v.product_id
-      WHERE v.is_active AND p.is_active
+      WHERE v.lifecycle_status = ANY($1) AND p.lifecycle_status = ANY($1)
       ORDER BY p.name, v.sku, v.id`,
+    [OPERATIONAL_LIFECYCLE_STATUSES],
   );
 
   if (variantRows.length === 0) return [];
@@ -664,10 +699,153 @@ export async function listStockableVariants(db: Queryable): Promise<StockableVar
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
 /**
- * Labels for a known set of variant ids, in bulk and regardless of
- * stockability. See {@link VariantLabel} for why the filter that
- * `listStockableVariants` applies would be wrong here.
+ * Reads a product's lifecycle **and locks the row** for the rest of the
+ * transaction.
+ *
+ * `FOR UPDATE`, because the caller is about to decide whether the merchandise
+ * may change status and — for an archive — whether it holds stock. Both
+ * decisions have to hold until the transaction commits, and the lock is what
+ * makes a concurrent posting transaction wait rather than slip a movement in
+ * between the check and the write.
+ *
+ * First in the lock order. Everything that touches both tables takes the
+ * product row before the variant rows; see {@link lockVariantLifecycle}.
+ */
+export async function lockProductLifecycle(
+  tx: DatabaseClient,
+  productId: string,
+): Promise<LifecycleStatus | null> {
+  const { rows } = await tx.query<{ lifecycle_status: string }>(
+    `SELECT lifecycle_status FROM products WHERE id = $1 FOR UPDATE`,
+    [productId],
+  );
+  const row = rows[0];
+  return row ? toLifecycle(row.lifecycle_status) : null;
+}
+
+/**
+ * Reads one variant's own lifecycle **and locks the row**, without touching its
+ * parent.
+ *
+ * The transition being decided is about this row's stored status, not the
+ * effective one: withdrawing a colour of a product the shop still sells is the
+ * ordinary case, and the parent's status is a ceiling on what may be *done*
+ * with the variant rather than a constraint on what it may *become*.
+ *
+ * Taking no product lock is also what keeps this free of deadlock against a
+ * product-level change: a transaction holding only a variant lock never goes on
+ * to ask for a product lock, so there is no cycle to close.
+ */
+export async function lockVariantLifecycleForUpdate(
+  tx: DatabaseClient,
+  variantId: string,
+): Promise<{ id: string; productId: string; status: LifecycleStatus } | null> {
+  const { rows } = await tx.query<{
+    id: string;
+    product_id: string;
+    lifecycle_status: string;
+  }>(
+    `SELECT id, product_id, lifecycle_status
+       FROM product_variants
+      WHERE id = $1
+        FOR UPDATE`,
+    [variantId],
+  );
+  const row = rows[0];
+  return row
+    ? { id: row.id, productId: row.product_id, status: toLifecycle(row.lifecycle_status) }
+    : null;
+}
+
+/**
+ * Locks every variant of a product and returns their ids, in id order.
+ *
+ * Archiving a product is a statement about all of its variants — none of them
+ * may hold stock — so all of them are locked, in one statement, before any
+ * balance is read. `ORDER BY id` fixes the order two concurrent product
+ * archives would take the locks in, so they queue instead of deadlocking.
+ *
+ * A product with no variants cannot exist (`createProduct` requires at least
+ * one), but an empty result is returned as an empty list rather than treated as
+ * an error: it is the caller's business what an unstocked product means.
+ */
+export async function lockVariantIdsForProduct(
+  tx: DatabaseClient,
+  productId: string,
+): Promise<string[]> {
+  const { rows } = await tx.query<{ id: string }>(
+    `SELECT id
+       FROM product_variants
+      WHERE product_id = $1
+      ORDER BY id
+        FOR UPDATE`,
+    [productId],
+  );
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Writes a product's new lifecycle status and moves its `updated_at`.
+ *
+ * An `UPDATE` of two columns and nothing else. The caller has already locked the
+ * row, decided that the transition is permitted, and — for an archive — proved
+ * the merchandise holds no stock; this statement is the last thing in that
+ * transaction rather than a place where any of it is re-decided.
+ */
+export async function updateProductLifecycle(
+  tx: DatabaseClient,
+  params: { id: string; status: LifecycleStatus; updatedAt: Date },
+): Promise<void> {
+  const { rowCount } = await tx.query(
+    `UPDATE products
+        SET lifecycle_status = $2,
+            updated_at       = $3
+      WHERE id = $1`,
+    [params.id, params.status, params.updatedAt],
+  );
+  assertUpdatedExactlyOneRow(rowCount, `product ${params.id} while setting its lifecycle`);
+}
+
+/** The variant counterpart of {@link updateProductLifecycle}. */
+export async function updateVariantLifecycle(
+  tx: DatabaseClient,
+  params: { id: string; status: LifecycleStatus; updatedAt: Date },
+): Promise<void> {
+  const { rowCount } = await tx.query(
+    `UPDATE product_variants
+        SET lifecycle_status = $2,
+            updated_at       = $3
+      WHERE id = $1`,
+    [params.id, params.status, params.updatedAt],
+  );
+  assertUpdatedExactlyOneRow(rowCount, `variant ${params.id} while setting its lifecycle`);
+}
+
+/**
+ * Guards an `UPDATE` that must touch exactly one row.
+ *
+ * Every caller locked the row earlier in the same transaction, so any other
+ * count is a broken assumption rather than an ordinary failure: it throws, the
+ * unit of work rolls back, and nothing half-written commits. Deliberately not an
+ * upsert — a missing row here is a defect to surface, not a row to conjure.
+ */
+function assertUpdatedExactlyOneRow(rowCount: number | null, what: string): void {
+  if (rowCount === 1) return;
+  throw new AppError(
+    'INTERNAL',
+    `Expected to update exactly one row for ${what}, updated ${rowCount ?? 'unknown'}`,
+  );
+}
+
+/**
+ * Labels for a known set of variant ids, in bulk and regardless of lifecycle.
+ * See {@link VariantLabel} for why the filter that `listOperationalVariants`
+ * applies would be wrong here.
  *
  * Two statements for any number of ids — the variants joined to their products
  * and brands, then their attributes — so a page of history costs the same as
@@ -794,7 +972,6 @@ function toProduct(
         : { id: row.brand_id, name: row.brand_name },
     classifications,
     lifecycleStatus: toLifecycle(row.lifecycle_status),
-    isActive: row.is_active,
     variants,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
@@ -815,7 +992,6 @@ function toVariant(
     referenceCost: toMoney(row.reference_cost_minor, row.reference_cost_currency),
     barcodes,
     lifecycleStatus: toLifecycle(row.lifecycle_status),
-    isActive: row.is_active,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
