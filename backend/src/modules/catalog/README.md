@@ -6,63 +6,108 @@
 
 **Responsibility:** what can be stocked, and the SKU that identifies it.
 
-> **The schema is ahead of the code.** Migration 0009 added the merchandise
-> foundation — brands, classification, controlled attribute definitions,
-> SKU-level price and reference cost, barcodes, and lifecycle — and **no
-> endpoint, service, or repository function reads or writes any of it yet.**
-> Everything described under [Endpoints](#endpoints) below is the whole of what
-> this module currently does. See
-> [The merchandise foundation](#the-merchandise-foundation-schema-only) for
-> what is now in the database and what PR 3 will do with it.
+The merchandise model this module implements is
+`Classification → Product → Variant/SKU`
+([the domain document](../../../../docs/03-architecture/retail-domain-and-or1.md),
+ADR 11). A **product** is the recognizable model and carries no stock — a brand,
+a description, how the merchandise is classified. A **variant** is the smallest
+independently sellable and stockable identity, and owns its SKU, price,
+reference cost, barcodes, and inventory.
 
 Inventory is stored per **variant**, never per product. Every product therefore
 has at least one variant; a plain item is a single default variant with no
 attributes. `variant_signature` (the normalized, sorted attribute set) carries a
 uniqueness constraint per product so "White / Size 9" cannot be created twice.
+It is **internal**: the column still exists and still enforces that rule, and it
+is no longer on the wire — clients were always told to treat it as opaque, so
+sending it invited them to stop.
 
 SKUs are generated server-side, unique, and immutable — they end up on physical
 shelf labels.
 
-`variant_attributes` is a thin key/value table. It was written without an
-attribute-definition table on the reasoning that a generic attribute engine is
-the classic overengineering trap in inventory systems, and that a controlled
-vocabulary could be added and backfilled from distinct existing values if it
-were ever needed. The merchandise model now needs one, and 0009 added it on
-exactly those terms — `variant_attribute_definitions`, a table of names and
-nothing else. **It is not yet connected to this table**; see
-[Controlled attribute names](#controlled-attribute-names).
+`variant_attributes` is a thin key/value table, and its names are now
+**controlled**: they come from `variant_attribute_definitions`, and the database
+refuses a new attribute under any other name
+(`variant_attributes_name_defined_fk`, 0010). See
+[Controlled attribute names](#controlled-attribute-names) for what that
+constraint does and does not cover.
 
 ## Endpoints
 
 ### `POST /api/catalog/products` — create a product
 
-Creates a product and all of its variants and attributes in a single
-transaction. Returns `201 Created` with the complete product, including the
-server-generated variant SKUs. A failure at any point leaves no partial records.
+Creates a product with its brand, classifications, variants, attributes, prices,
+reference costs, and barcodes — in a **single transaction**. Returns
+`201 Created` with the complete product, including the server-generated variant
+SKUs. A failure anywhere leaves nothing behind, including a brand or a
+classification value the request would have introduced.
 
 ```jsonc
-// request
+// request — everything except `name` and `variants` is optional
 {
-  "name": "Running Shoe",
+  "name": "Bel Ami",
   "description": "Optional",
-  "variants": [{ "attributes": { "color": "White", "size": "9" } }],
+  "brand": "Steve Madden",
+  "classifications": { "audience": "Women", "category": "Footwear", "type": "Sandals" },
+  "variants": [
+    {
+      "attributes": { "color": "Black", "size": "8", "width": "M" },
+      "sellingPrice": { "amountMinor": 249900, "currency": "HTG" },
+      "referenceCost": { "amountMinor": 1800, "currency": "USD" },
+      "barcodes": ["0885140123456"],
+    },
+  ],
 }
 ```
+
+**A brand is a name, not an id.** The person entering merchandise knows "Steve
+Madden" and could not know a uuid, so the service resolves it against the
+existing brands case-insensitively and creates it only if it is genuinely new.
+The same holds for a classification value. Neither is a separate management
+screen to visit first.
+
+**New merchandise always begins `ACTIVE`**, so lifecycle is not a request field —
+nor is any id, SKU, signature, or timestamp. `.strict()` refuses all of them.
 
 Rejections use the central structured error format:
 
 - `VALIDATION_FAILED` (400) — blank name, no variants, blank attribute name or
-  value, duplicate variants in one request, or any unknown field (including a
-  client-supplied `sku`, which the schema refuses).
+  value, duplicate variants in one request, a malformed price, a duplicate or
+  whitespace-bearing barcode, an **unknown classification dimension**, an
+  **attribute name that is not in the vocabulary**, or any unknown field
+  (including a client-supplied `sku`, which the schema refuses). The last two
+  name what is allowed in the error detail, so a caller is told what to use.
 - `CONFLICT` (409) — a genuine uniqueness collision at the database.
 
 ### `GET /api/catalog/products` — list products
 
-Returns `200 OK` with an array of every product, each with its variants and
-their attributes. An empty catalog is an empty array. Ordering is deterministic
-(products and variants by creation time then id; attributes by normalized name).
-The whole catalog is read in a fixed number of queries — no N+1. No pagination,
-filtering, search, or sorting yet.
+Returns `200 OK` with an array of every product: brand, classifications,
+lifecycle, and for each variant its SKU, attributes, selling price, reference
+cost, and barcodes. An empty catalog is an empty array.
+
+Ordering is deterministic at every level — products and variants by creation
+time then id, classifications by dimension key, attributes by normalized name,
+barcodes by code. The whole catalog is read in **at most five statements**, and
+`getProductById` is the same loader with a filter, so what creation returns and
+what the list returns cannot differ. No pagination, filtering, search, or
+sorting yet.
+
+**Merchandise that predates the model reads back as honest absence**:
+`brand: null`, `classifications: []`, `sellingPrice: null`, `referenceCost:
+null`, `barcodes: []`. Nothing is invented — no brand is parsed out of a product
+name, and no zero stands in for a price nobody has set.
+
+### `GET /api/catalog/metadata` — the vocabulary
+
+Returns `200 OK` with the brands, the classification dimensions and their
+values, and the controlled attribute names, so a form can offer them rather than
+have somebody type one and be refused.
+
+One bounded read rather than an endpoint per vocabulary: three small lists,
+always wanted together, by the one form that needs them. **Read-only** — brands
+and classification values are created as a side effect of entering merchandise,
+and attribute names grow by migration, so there is nothing here for a management
+endpoint to manage.
 
 ## What other modules ask this one
 
@@ -169,19 +214,17 @@ mean a genuine second product was answered with the first one. There is no
 uniqueness on a product name either, so an automatic retry would be an automatic
 duplicate — which is why the browser never retries this on its own.
 
-## The merchandise foundation (schema only)
+## The merchandise model
 
-Migration 0009 put Ekon's approved merchandise model into the database:
-`Classification → Product → Variant/SKU → SKU × Location`
-([the domain document](../../../../docs/03-architecture/retail-domain-and-or1.md),
-ADR 11). Nothing in this module reads it. It is here so that PR 3 changes a
-write path rather than a write path and a schema at the same time.
+Migration 0009 put the model into the database and 0010 closed its last open
+bridge; this module now reads and writes all of it.
 
 Every existing product id, variant id, SKU, variant signature, attribute,
-movement, and balance came through 0009 untouched. Nothing was inferred from
-existing data: no brand was parsed out of a product name, no category guessed,
-no price or cost invented. Those columns are `NULL` on existing merchandise,
-and `NULL` means "not established yet" — a zero would say the item is free.
+movement, and balance came through both migrations untouched. Nothing was
+inferred from existing data: no brand was parsed out of a product name, no
+category guessed, no price or cost invented. Those columns are `NULL` on
+merchandise nobody has reviewed, and `NULL` means "not established yet" — a zero
+would say the item is free.
 
 | What                         | Where                                                                             |
 | ---------------------------- | --------------------------------------------------------------------------------- |
@@ -221,48 +264,96 @@ Uniqueness is per variant, not global — deliberately, because manufacturer
 codes are reused in the real world and a global constraint would refuse to
 record the truth (INV-13).
 
-### Lifecycle, and the flag it does not yet replace
+### Lifecycle is read, and nothing sets it
 
-`ACTIVE → DISCONTINUED → ARCHIVED`, on both products and variants, defaulting to
-`ACTIVE`. A quantity reaching zero is **not** a lifecycle change: selling the
-last unit is a fact about a shelf, discontinuing is a decision about
-merchandise.
+`ACTIVE → DISCONTINUED → ARCHIVED`, on both products and variants. New
+merchandise is written `ACTIVE`, `lifecycleStatus` is on the wire, and **there is
+no endpoint that changes it.** A quantity reaching zero is **not** a lifecycle
+change: selling the last unit is a fact about a shelf, discontinuing is a
+decision about merchandise.
 
-**`is_active` is still the only flag anything reads.** `findStockableVariant`
-and `listStockableVariants` are unchanged, so stockability behaves exactly as it
-did before 0009 and `lifecycle_status` is inert — written by its default, read
-by nobody. Two columns for adjacent notions is a bridge and not a design: making
-lifecycle authoritative in the migration that introduced it would have changed
-stockability underneath a deployed application with no way to set it. PR 5
-builds the lifecycle workflow and resolves the two into one.
+**`is_active` is still the only flag that decides stockability.**
+`findStockableVariant` and `listStockableVariants` are unchanged, so receiving
+and removal behave exactly as they did before 0009, and archiving a product
+changes nothing about what may be stocked — a test asserts it. Two columns for
+adjacent notions is a bridge and not a design, and it is why both are on the
+wire: `isActive` is stockability today, `lifecycleStatus` is merchandise policy.
+Making lifecycle authoritative before anything can set it would change what may
+be received underneath merchandise nobody has reviewed. **PR 5** builds the
+lifecycle workflow and resolves the two into one.
 
 ### Controlled attribute names
 
-`variant_attribute_definitions` starts **empty**, and `variant_attributes` has
-no foreign key onto it. That is deliberate, and it is the one place where the
-schema could not finish the job on its own.
+An attribute name must be in `variant_attribute_definitions`. The vocabulary
+0010 seeds is `color`, `size`, `width`, `material` — enough for the merchandise
+in ADR 11: footwear varies by colour, size and width, handbags by colour and
+material, socks by colour and size.
 
-Adding the key would need a definition row for every distinct attribute name
-already stored, each with a UUIDv7 — and ids here are generated in application
-code, never by the database (0001), so that the offline milestone can move
-generation to the browser without a schema change. A migration calling
-`gen_random_uuid()` to satisfy a foreign key would trade that for a day's
-convenience. It would also stop the deployed backend from creating a product
-with an attribute name nobody had defined yet.
+**An unknown name is refused, not defined.** This is the opposite of how a brand
+or a classification value is handled, and the asymmetry is the rule: an
+attribute name is _structure_. `color` is the shape variant identity takes
+across the whole catalog and it is baked into `variant_signature` permanently, so
+a shop that can create one by typing it ends up with `color`, `colour`, and
+`couleur` describing the same thing and no report by colour is possible again. A
+brand or a category is data about one product and costs nothing to add.
 
-So: the vocabulary is populated by PR 3, from the distinct names already in
-`variant_attributes`, with application-generated ids, and the constraint lands
-once the write path can create a definition. Until then this endpoint still
-accepts any attribute name, exactly as it always has.
+Growing the vocabulary is therefore a **migration** until there is a workflow for
+it. That is a real limitation and it is stated rather than worked around: PR 7's
+form offers the defined names from `GET /api/catalog/metadata`, and merchandise
+that needs a fifth attribute needs a migration first.
+
+**Attribute _values_ stay free display text.** `Black` is not a controlled
+option, and this PR did not build an option-management engine for one.
+
+#### What the database guarantees, and what it does not
+
+`variant_attributes_name_defined_fk` (0010) is a `NOT VALID` foreign key onto
+`variant_attribute_definitions (name)`. PostgreSQL enforces it on **every insert
+and update**, and does not check rows that were already there.
+
+Both halves are deliberate. New writes are controlled by the database rather than
+only by the service check above, which somebody could forget to call. And every
+attribute stored before any vocabulary existed — a Creole name typed into a
+Creole-speaking shop — keeps its name, its value, and its place in its variant's
+signature. A migration that refused to apply over such a row would block the
+deploy; one that renamed it would change which variant the row identifies and
+orphan the inventory history keyed to it.
+
+Full enforcement becomes possible once every distinct name in
+`variant_attributes` has a definition — an operator task of reading them,
+deciding which are real merchandise attributes and which were mistakes, and
+defining the real ones. It completes with
+
+```sql
+ALTER TABLE variant_attributes VALIDATE CONSTRAINT variant_attributes_name_defined_fk;
+```
+
+which leaves an ordinary fully-valid key. A fresh installation has nothing to
+review and would pass that statement today; it is not run in a migration because
+a migration cannot know which installation it is on. See INV-18.
 
 ## Not yet
 
-Everything 0009 added is schema only — no endpoint reads or writes a brand, a
-classification, an attribute definition, a price, a cost, a barcode, or a
-lifecycle status, and no request or response schema mentions one. That is PR 3.
+**Lifecycle mutation.** Nothing discontinues or archives anything — PR 5.
 
-Also still absent: deactivation (products/variants carry `is_active` but nothing
-sets it to false yet — both questions above already honour both flags, so the
-workflow that lands it only has to set the column), product/variant updates,
-deletion, pagination/filtering/search, and anything to do with inventory
-movements, balances, or the audit log.
+Deactivation (products and variants carry `is_active` but nothing sets it to
+false yet — both questions above already honour both flags, so the workflow that
+lands it only has to set the column), product and variant updates of any kind,
+deletion, editing or removing a barcode after creation, pagination, filtering,
+search, brand or vocabulary administration, controlled attribute _values_,
+barcode scanning, costing beyond the single reference figure, and anything to do
+with inventory movements, balances, or the audit log.
+
+Product creation still carries **no operation id and writes no `operations`
+row**, and the frontend still sends none. Nothing about that changed because the
+command got richer: the header exists so a retried _movement_ posts once, and
+claiming idempotency here would mean a genuine second product being answered
+with the first one. There is no uniqueness on a product name either, so an
+automatic retry would be an automatic duplicate — which is why the browser never
+retries this on its own.
+
+The product screen is still the temporary shell: it captures a name, a
+description, and free-typed attribute names, so an attribute outside the
+vocabulary is refused by the server rather than absent from a picker. The
+merchandise form that captures brand, classification, price, cost, and barcodes
+is **PR 7**.
