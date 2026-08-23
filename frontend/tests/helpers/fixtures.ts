@@ -43,6 +43,9 @@ export function userResponse(user: AuthenticatedUser = userFixture()): { user: A
  * `isActive` on both the product and the variant is overridable because
  * receiving has to refuse each of them separately: a retired product and a
  * discontinued size are different facts, and neither may take new stock.
+ * `lifecycleStatus` is not overridable: it does not govern stockability, and a
+ * fixture that let a test suggest otherwise would be documenting the wrong
+ * rule.
  */
 export function productFixture(
   overrides: {
@@ -59,6 +62,12 @@ export function productFixture(
     id,
     name: overrides.name ?? 'Diri',
     description: null,
+    // What migrated merchandise looks like, and what the temporary product form
+    // still creates: no brand, nothing classified, nothing priced. Every one of
+    // these is a real state the API returns, not a placeholder.
+    brand: null,
+    classifications: [],
+    lifecycleStatus: 'ACTIVE' as const,
     isActive: overrides.isActive ?? true,
     variants: [
       {
@@ -68,9 +77,12 @@ export function productFixture(
         id: `${id.slice(0, -2)}f1`,
         productId: id,
         sku: overrides.sku ?? 'EKN-AB12CD34',
-        variantSignature: 'signature',
-        isActive: overrides.variantIsActive ?? true,
         attributes: overrides.attributes ? [...overrides.attributes] : [],
+        sellingPrice: null,
+        referenceCost: null,
+        barcodes: [],
+        lifecycleStatus: 'ACTIVE' as const,
+        isActive: overrides.variantIsActive ?? true,
         createdAt: '2026-08-02T12:00:00.000Z',
         updatedAt: '2026-08-02T12:00:00.000Z',
       },

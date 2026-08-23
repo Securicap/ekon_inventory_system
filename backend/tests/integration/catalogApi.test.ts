@@ -61,17 +61,35 @@ describe('POST /api/catalog/products', () => {
     expect(product.name).toBe('Bottled Water');
     expect(product.description).toBeNull();
     expect(product.isActive).toBe(true);
+    expect(product.lifecycleStatus).toBe('ACTIVE');
     expect(product.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(product.createdAt).toBe('2026-08-03T12:00:00.000Z');
     expect(product.updatedAt).toBe('2026-08-03T12:00:00.000Z');
 
+    // Merchandise nobody supplied comes back as an honest absence, never as a
+    // placeholder and never as a zero price.
+    expect(product.brand).toBeNull();
+    expect(product.classifications).toEqual([]);
+
     expect(product.variants).toHaveLength(1);
     const [variant] = product.variants;
     expect(variant?.sku).toMatch(SKU_PATTERN);
-    expect(variant?.variantSignature).toBe('[]');
     expect(variant?.attributes).toEqual([]);
+    expect(variant?.sellingPrice).toBeNull();
+    expect(variant?.referenceCost).toBeNull();
+    expect(variant?.barcodes).toEqual([]);
+    expect(variant?.lifecycleStatus).toBe('ACTIVE');
     expect(variant?.isActive).toBe(true);
     expect(variant?.productId).toBe(product.id);
+  });
+
+  it('does not put the variant signature on the wire', async () => {
+    // It is the database's handle on variant identity and clients were always
+    // told to treat it as opaque, so it is no longer sent at all. The column
+    // still exists and still makes a duplicate variant impossible.
+    const { body } = await post(app, { name: 'Opaque', variants: [{ attributes: {} }] });
+    const variant = (body as { variants: Record<string, unknown>[] }).variants[0];
+    expect(variant).not.toHaveProperty('variantSignature');
   });
 
   it('creates a product with multiple attributed variants and a unique SKU each', async () => {
@@ -98,8 +116,10 @@ describe('POST /api/catalog/products', () => {
       { name: 'color', value: 'White' },
       { name: 'size', value: '9' },
     ]);
-    // Different attribute values give different signatures.
-    expect(product.variants[0]?.variantSignature).not.toBe(product.variants[1]?.variantSignature);
+    expect(product.variants[1]?.attributes).toEqual([
+      { name: 'color', value: 'Black' },
+      { name: 'size', value: '9' },
+    ]);
   });
 
   it('trims and normalizes accepted input', async () => {
@@ -116,7 +136,9 @@ describe('POST /api/catalog/products', () => {
     expect(product.variants[0]?.attributes).toEqual([{ name: 'color', value: 'White' }]);
   });
 
-  it('produces the same signature regardless of attribute input order', async () => {
+  it('reads attributes back in one order whatever order they were sent in', async () => {
+    // Input order never matters: it is normalized away on arrival, which is what
+    // makes two variants written with the same attributes the same variant.
     const first = await post(app, {
       name: 'Order A',
       variants: [{ attributes: { color: 'Red', size: '42' } }],
@@ -128,7 +150,11 @@ describe('POST /api/catalog/products', () => {
 
     const a = createProductResponseSchema.parse(first.body);
     const b = createProductResponseSchema.parse(second.body);
-    expect(a.variants[0]?.variantSignature).toBe(b.variants[0]?.variantSignature);
+    expect(a.variants[0]?.attributes).toEqual([
+      { name: 'color', value: 'Red' },
+      { name: 'size', value: '42' },
+    ]);
+    expect(b.variants[0]?.attributes).toEqual(a.variants[0]?.attributes);
   });
 
   it('rejects an empty product name with a structured validation error', async () => {
@@ -272,6 +298,6 @@ describe('GET /api/catalog/products', () => {
     ]);
     // Variants ordered by creation, default (empty) variant created first.
     expect(products[1]?.variants).toHaveLength(2);
-    expect(products[1]?.variants[0]?.variantSignature).toBe('[]');
+    expect(products[1]?.variants[0]?.attributes).toEqual([]);
   });
 });

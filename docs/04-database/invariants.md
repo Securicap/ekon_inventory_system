@@ -295,3 +295,49 @@ price, and it does not know which units on the shelf came from which purchase.
 Nothing may read it and call the result profit. Historical costing needs cost
 carried on receipts and consumed by depletions — a ledger change, and post-OR1
 work.
+
+## INV-18 — A new variant attribute uses a name the catalog has defined
+
+`variant_attributes.attribute_name` must exist in
+`variant_attribute_definitions.name`. An attribute name is structure, not data:
+it is what `variant_signature` is built from, so a catalog that grows `color`,
+`colour`, and `couleur` can never be reported on again.
+
+_Enforcement:_ `variant_attributes_name_defined_fk` (0010), a foreign key onto
+the definition's **name** rather than its id — the name is already the identity,
+so the natural key states the relationship that is there instead of
+manufacturing a second one. `ON DELETE RESTRICT` and `ON UPDATE RESTRICT`: a
+definition in use cannot be removed, and renaming `color` would rewrite the
+identity of every variant carrying one. The catalog service checks the same rule
+first so a caller gets a field-level message naming what it may use, but the
+check is the message and the key is the guarantee.
+
+**Scope, stated exactly: the key is `NOT VALID`.** PostgreSQL enforces it on
+every insert and update, and does not check rows that were already stored. Both
+halves are deliberate. Every new write is controlled by the database rather than
+only by a service check somebody could forget to call; and every attribute
+written before any vocabulary existed keeps its name, its value, and its place
+in its variant's signature. A migration that refused to apply over such a row
+would block a deploy over data nobody has reviewed, and one that renamed it
+would change which variant the row identifies and orphan the inventory history
+keyed to it.
+
+This is not the `NOT VALID` that 0008 declined. There it would have skipped a
+scan over rows already known to be good, buying a shorter lock in exchange for a
+window in which the ledger accepted unchecked values. Here the existing rows are
+genuinely unverified and must stay, so `NOT VALID` is not a deferral of the check
+but a statement of its exact scope.
+
+_When full enforcement becomes possible:_ once every distinct name in
+`variant_attributes` has a definition — an operator task of reading them,
+deciding which are real merchandise attributes, and defining those. It completes
+with `ALTER TABLE variant_attributes VALIDATE CONSTRAINT
+variant_attributes_name_defined_fk`, which scans without locking writers out and
+leaves an ordinary fully-valid key. A fresh installation has nothing to review
+and would pass it today; no migration runs it, because a migration cannot know
+which installation it is on.
+
+Attribute **values** are deliberately not controlled. `Black` is display text,
+normalized for identity and stored with its case preserved (0003); a controlled
+option set for every attribute of every kind of merchandise is the
+over-engineering trap this schema has avoided twice already.

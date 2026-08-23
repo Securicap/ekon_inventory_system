@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../../src/platform/clock/index.js';
 import { newId } from '../../src/platform/ids/uuidv7.js';
 import { createCatalogService } from '../../src/modules/catalog/index.js';
+import { productRequest } from '../helpers/catalogRequests.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
 
 /**
@@ -28,7 +29,6 @@ describe('merchandise schema and constraints', () => {
     await db.pool.query('DELETE FROM variant_barcodes');
     await db.pool.query('DELETE FROM product_classifications');
     await db.pool.query('DELETE FROM classification_values');
-    await db.pool.query('DELETE FROM variant_attribute_definitions');
     await db.pool.query('DELETE FROM variant_attributes');
     await db.pool.query('DELETE FROM product_variants');
     await db.pool.query('DELETE FROM products');
@@ -232,8 +232,14 @@ describe('merchandise schema and constraints', () => {
       );
     }
 
+    it('carries the vocabulary 0010 seeded', async () => {
+      const { rows } = await db.pool.query<{ name: string }>(
+        `SELECT name FROM variant_attribute_definitions ORDER BY name`,
+      );
+      expect(rows.map((r) => r.name)).toEqual(['color', 'material', 'size', 'width']);
+    });
+
     it('refuses the same attribute defined twice', async () => {
-      await define('color');
       await expect(define('color')).rejects.toThrow(/variant_attribute_definitions_name_unique/);
     });
 
@@ -254,10 +260,11 @@ describe('merchandise schema and constraints', () => {
       await expect(define('a'.repeat(60))).resolves.toBeUndefined();
     });
 
-    it('does not yet constrain what variant_attributes may store', async () => {
-      // The transition 0009 documents: an attribute name nobody has defined is
-      // still accepted, because the deployed backend still sends them and PR 3
-      // is what populates the vocabulary and adds the key.
+    it('refuses an attribute name nobody has defined (0010)', async () => {
+      // The bridge 0009 left open, closed by 0010: the database itself now
+      // refuses a new attribute name that is not in the vocabulary, so a
+      // service that forgot to check is not the only thing standing between a
+      // typo and permanent variant structure.
       const variantId = await insertVariant(await insertProduct());
       await expect(
         db.pool.query(
@@ -265,7 +272,36 @@ describe('merchandise schema and constraints', () => {
            VALUES ($1, 'undefined_attribute', 'x')`,
           [variantId],
         ),
+      ).rejects.toThrow(/variant_attributes_name_defined_fk/);
+    });
+
+    it('accepts a defined attribute name', async () => {
+      const variantId = await insertVariant(await insertProduct());
+      await expect(
+        db.pool.query(
+          `INSERT INTO variant_attributes (variant_id, attribute_name, attribute_value)
+           VALUES ($1, 'color', 'Black')`,
+          [variantId],
+        ),
       ).resolves.toBeDefined();
+    });
+
+    it('refuses to delete or rename a definition that is in use', async () => {
+      const variantId = await insertVariant(await insertProduct());
+      await db.pool.query(
+        `INSERT INTO variant_attributes (variant_id, attribute_name, attribute_value)
+         VALUES ($1, 'color', 'Black')`,
+        [variantId],
+      );
+      await expect(
+        db.pool.query(`DELETE FROM variant_attribute_definitions WHERE name = 'color'`),
+      ).rejects.toThrow(/violates foreign key constraint/);
+      // Renaming would rewrite the identity of every variant carrying one.
+      await expect(
+        db.pool.query(
+          `UPDATE variant_attribute_definitions SET name = 'colour' WHERE name = 'color'`,
+        ),
+      ).rejects.toThrow(/violates foreign key constraint/);
     });
   });
 
@@ -549,13 +585,15 @@ describe('merchandise schema and constraints', () => {
 
   // Application compatibility ----------------------------------------------
 
-  describe('the existing catalog write path', () => {
-    it('still creates a product with variants and attributes, naming no new column', async () => {
+  describe('the catalog write path', () => {
+    it('creates a product with variants and attributes', async () => {
       const catalog = createCatalogService({ pool: db.pool, clock: fixedClock(NOW) });
-      const product = await catalog.createProduct({
-        name: 'Bel Ami',
-        variants: [{ attributes: { color: 'Black', size: '8' } }],
-      });
+      const product = await catalog.createProduct(
+        productRequest({
+          name: 'Bel Ami',
+          variants: [{ attributes: { color: 'Black', size: '8' } }],
+        }),
+      );
 
       expect(product.variants).toHaveLength(1);
       expect(product.variants[0]!.sku).toMatch(/^EKN-[0-9A-Z]{8}$/);
@@ -590,7 +628,7 @@ describe('merchandise schema and constraints', () => {
 
     it('still lists the catalog', async () => {
       const catalog = createCatalogService({ pool: db.pool, clock: fixedClock(NOW) });
-      await catalog.createProduct({ name: 'Bel Ami', variants: [{ attributes: {} }] });
+      await catalog.createProduct(productRequest({ name: 'Bel Ami' }));
       const products = await catalog.listProducts();
       expect(products).toHaveLength(1);
       expect(products[0]!.variants).toHaveLength(1);

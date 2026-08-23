@@ -1,9 +1,10 @@
-import type { CreateProductRequest, Product } from '@ekon/shared';
+import type { CatalogMetadataResponse, CreateProductRequest, Money, Product } from '@ekon/shared';
 import type { Clock } from '../../platform/clock/index.js';
 import type { DatabaseClient, DatabasePool } from '../../platform/db/pool.js';
 import { withTransaction } from '../../platform/db/unitOfWork.js';
 import { AppError, conflict } from '../../platform/http/errors.js';
 import { newId } from '../../platform/ids/uuidv7.js';
+import { displayMerchandiseName, normalizeMerchandiseName } from './domain/merchandise.js';
 import { generateSku as defaultGenerateSku } from './domain/sku.js';
 import {
   AttributeNormalizationError,
@@ -15,13 +16,23 @@ import {
   findStockableVariant,
   getProductById,
   insertProduct,
+  insertProductClassifications,
   insertVariant,
   insertVariantAttributes,
+  insertVariantBarcodes,
+  listAttributeDefinitions,
+  listBrands,
   listCatalog,
+  listClassificationDimensions,
+  listDimensions,
   listStockableVariants,
+  resolveBrand,
+  resolveClassificationValue,
   uniqueViolationConstraint,
   VARIANT_SIGNATURE_UNIQUE_CONSTRAINT,
   VARIANT_SKU_UNIQUE_CONSTRAINT,
+  type ClassificationAssignment,
+  type DimensionRecord,
   type StockableVariant,
   type StockableVariantListing,
 } from './infrastructure/catalogRepository.js';
@@ -45,6 +56,12 @@ export interface CatalogService {
   createProduct(input: CreateProductRequest): Promise<Product>;
   listProducts(): Promise<Product[]>;
   /**
+   * What the catalog already knows: its brands, its classification dimensions
+   * and their values, and the controlled attribute names. Read-only — nothing
+   * here is created except as a side effect of entering merchandise.
+   */
+  getMetadata(): Promise<CatalogMetadataResponse>;
+  /**
    * Whether a variant exists and may still be stocked. `null` when there is no
    * such variant.
    *
@@ -57,11 +74,9 @@ export interface CatalogService {
    *
    * The returned `isActive` is **effective stockability** — the variant and its
    * parent product both active — and not the `product_variants.is_active`
-   * column on its own. The lifecycle rule that combines them is the catalog's,
-   * which is why it is applied here rather than left for two inventory
-   * workflows to remember separately. `null` still means only "no such
-   * variant": a variant under a withdrawn product exists and comes back
-   * unstockable, so the caller can tell it from a uuid nobody ever issued.
+   * column on its own. It does **not** consult `lifecycle_status`, and the
+   * merchandise model did not change that: lifecycle is inert until PR 5.
+   * `null` still means only "no such variant".
    */
   findStockableVariant(variantId: string): Promise<StockableVariant | null>;
   /**
@@ -85,6 +100,20 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
   const { pool, clock } = deps;
   const generateSku = deps.generateSku ?? defaultGenerateSku;
 
+  /**
+   * Creates a product and everything that belongs to it, in one transaction.
+   *
+   * The order is: settle what is purely structural before opening a transaction,
+   * then resolve the merchandise vocabulary, then write. A request whose
+   * attributes do not normalize never reaches the database at all.
+   *
+   * Inside the transaction, resolving comes first and writing second, so a
+   * request naming an unknown classification dimension or an undefined attribute
+   * fails before a single row exists. Everything after that either commits
+   * together — brand, classifications, product, variants, attributes, prices,
+   * barcodes — or leaves nothing behind (INV-5's discipline, applied to
+   * merchandise rather than to the ledger).
+   */
   async function createProduct(input: CreateProductRequest): Promise<Product> {
     const now = clock.now();
 
@@ -98,13 +127,20 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
       input.description && input.description.length > 0 ? input.description : null;
 
     return withTransaction(pool, async (tx) => {
+      await assertAttributeNamesAreDefined(tx, prepared);
+
+      const brand = input.brand ? await resolveRequestedBrand(tx, input.brand, now) : null;
+      const classifications = await resolveClassifications(tx, input.classifications, now);
+
       await insertProduct(tx, {
         id: productId,
         name: input.name,
         description,
+        brandId: brand?.id ?? null,
         createdAt: now,
         updatedAt: now,
       });
+      await insertProductClassifications(tx, productId, classifications, now);
 
       for (const variant of prepared) {
         const variantId = newId();
@@ -112,9 +148,17 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
           id: variantId,
           productId,
           variantSignature: variant.signature,
+          sellingPrice: variant.sellingPrice,
+          referenceCost: variant.referenceCost,
           createdAt: now,
         });
         await insertVariantAttributes(tx, variantId, variant.attributes);
+        await insertVariantBarcodes(
+          tx,
+          variantId,
+          variant.barcodes.map((barcode) => ({ id: newId(), barcode })),
+          now,
+        );
       }
 
       const created = await getProductById(tx, productId);
@@ -128,6 +172,131 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
     return listCatalog(pool);
   }
 
+  async function getMetadata(): Promise<CatalogMetadataResponse> {
+    const [brands, classificationDimensions, variantAttributeDefinitions] = await Promise.all([
+      listBrands(pool),
+      listClassificationDimensions(pool),
+      listAttributeDefinitions(pool),
+    ]);
+    return { brands, classificationDimensions, variantAttributeDefinitions };
+  }
+
+  /**
+   * A brand is **resolved, not created on sight**: an existing normalized name
+   * wins, and only a genuinely new one becomes a row. The id minted here is
+   * spent only if the insert actually creates something, which is the ordinary
+   * cost of generating ids in application code (0001) rather than in the
+   * database.
+   */
+  async function resolveRequestedBrand(
+    tx: DatabaseClient,
+    requested: string,
+    now: Date,
+  ): Promise<{ id: string; name: string }> {
+    return resolveBrand(tx, {
+      id: newId(),
+      name: displayMerchandiseName(requested),
+      normalizedName: normalizeMerchandiseName(requested),
+      now,
+    });
+  }
+
+  /**
+   * Turns `{ category: "Footwear" }` into the rows a product is filed under.
+   *
+   * **An unknown dimension key is refused; an unknown value is created.** The
+   * asymmetry is the whole controlled-classification rule: which kinds of
+   * grouping exist is a decision about the merchandise model, and one product
+   * form should not be able to invent `colour_family` by typo. Which values a
+   * dimension holds is the shop's own data — `Sandals` entered for the first
+   * time is a new sandal category, not a mistake.
+   */
+  async function resolveClassifications(
+    tx: DatabaseClient,
+    requested: CreateProductRequest['classifications'],
+    now: Date,
+  ): Promise<ClassificationAssignment[]> {
+    const entries = Object.entries(requested);
+    if (entries.length === 0) return [];
+
+    const dimensions = await listDimensions(tx);
+    const byKey = new Map<string, DimensionRecord>(dimensions.map((d) => [d.key, d]));
+
+    const details: { path: string; message: string }[] = [];
+    for (const [key] of entries) {
+      if (!byKey.has(key)) {
+        details.push({
+          path: `classifications.${key}`,
+          message:
+            `Unknown classification dimension "${key}". ` +
+            `Known dimensions: ${dimensions.map((d) => d.key).join(', ')}`,
+        });
+      }
+    }
+    if (details.length > 0) {
+      throw new AppError('VALIDATION_FAILED', 'Request validation failed', details);
+    }
+
+    const assignments: ClassificationAssignment[] = [];
+    for (const [key, value] of entries) {
+      const dimension = byKey.get(key)!;
+      const valueId = await resolveClassificationValue(tx, {
+        id: newId(),
+        dimensionId: dimension.id,
+        value: displayMerchandiseName(value),
+        normalizedValue: normalizeMerchandiseName(value),
+        now,
+      });
+      assignments.push({ dimensionId: dimension.id, valueId });
+    }
+    return assignments;
+  }
+
+  /**
+   * Attribute names come from the vocabulary, and an unknown one is refused
+   * rather than defined.
+   *
+   * The opposite of how brands and classification values are handled, and for a
+   * reason worth stating: an attribute name is **structure**. `color` is the
+   * shape variant identity takes across every product in the catalog, and it is
+   * baked into `variant_signature` permanently. A shop that can create one by
+   * typing it ends up with `color`, `colour`, and `couleur` describing the same
+   * thing, and no report by colour is possible again. A brand or a category is
+   * data about one product and costs nothing to add.
+   *
+   * The database refuses the same write regardless
+   * (`variant_attributes_name_defined_fk`, 0010). This check exists so the
+   * caller gets a field-level message naming what it may use, instead of a
+   * foreign-key error.
+   */
+  async function assertAttributeNamesAreDefined(
+    tx: DatabaseClient,
+    variants: PreparedVariant[],
+  ): Promise<void> {
+    const used = new Set(variants.flatMap((v) => v.attributes.map((a) => a.name)));
+    if (used.size === 0) return;
+
+    const definitions = await listAttributeDefinitions(tx);
+    const defined = new Set(definitions.map((d) => d.name));
+
+    const details: { path: string; message: string }[] = [];
+    variants.forEach((variant, index) => {
+      for (const attribute of variant.attributes) {
+        if (defined.has(attribute.name)) continue;
+        details.push({
+          path: `variants.${index}.attributes.${attribute.name}`,
+          message:
+            `Unknown attribute "${attribute.name}". ` +
+            `Defined attributes: ${definitions.map((d) => d.name).join(', ')}`,
+        });
+      }
+    });
+
+    if (details.length > 0) {
+      throw new AppError('VALIDATION_FAILED', 'Request validation failed', details);
+    }
+  }
+
   /**
    * Inserts a variant, retrying with a fresh SKU only on a SKU uniqueness
    * collision, isolated by a savepoint so the surrounding transaction survives.
@@ -135,7 +304,14 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
    */
   async function insertVariantWithUniqueSku(
     tx: DatabaseClient,
-    base: { id: string; productId: string; variantSignature: string; createdAt: Date },
+    base: {
+      id: string;
+      productId: string;
+      variantSignature: string;
+      sellingPrice: Money | null;
+      referenceCost: Money | null;
+      createdAt: Date;
+    },
   ): Promise<void> {
     for (let attempt = 1; attempt <= MAX_SKU_ATTEMPTS; attempt += 1) {
       const sku = generateSku();
@@ -164,6 +340,7 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
   return {
     createProduct,
     listProducts,
+    getMetadata,
     findStockableVariant: (variantId) => findStockableVariant(pool, variantId),
     listStockableVariants: () => listStockableVariants(pool),
   };
@@ -172,6 +349,9 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
 interface PreparedVariant {
   attributes: NormalizedAttribute[];
   signature: string;
+  sellingPrice: Money | null;
+  referenceCost: Money | null;
+  barcodes: string[];
 }
 
 function prepareVariants(variants: CreateProductRequest['variants']): PreparedVariant[] {
@@ -181,7 +361,13 @@ function prepareVariants(variants: CreateProductRequest['variants']): PreparedVa
   variants.forEach((variant, index) => {
     try {
       const attributes = normalizeAttributes(variant.attributes, `variants.${index}.attributes`);
-      prepared.push({ attributes, signature: buildVariantSignature(attributes) });
+      prepared.push({
+        attributes,
+        signature: buildVariantSignature(attributes),
+        sellingPrice: variant.sellingPrice ?? null,
+        referenceCost: variant.referenceCost ?? null,
+        barcodes: variant.barcodes,
+      });
     } catch (error) {
       if (error instanceof AttributeNormalizationError) {
         details.push(...error.details);
