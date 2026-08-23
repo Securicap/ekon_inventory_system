@@ -5,10 +5,19 @@ Always Free VM: Caddy in front, the application behind it, PostgreSQL on an
 attached block volume, and a nightly backup that leaves the machine.
 
 This is a **production candidate**, not production. Nothing in this document
-makes it live. It becomes production when every box in the
-[acceptance checklist](#production-candidate-acceptance-checklist) is ticked —
-and not before, because until the backup and the restore drill have both been
+makes it live. This stack would be fit to host production only once every box in
+the [acceptance checklist](#production-candidate-acceptance-checklist) is ticked
+— and not before, because until the backup and the restore drill have both been
 seen to work, the business's inventory would exist in exactly one place.
+
+**It is one optional infrastructure candidate, not the plan of record.** OR1 —
+the milestone at which Ekon becomes the store's real system, defined in
+[retail-domain-and-or1.md](../03-architecture/retail-domain-and-or1.md) — does
+not depend on Oracle Cloud or on zero-cost infrastructure at all. Roughly $20 is
+available for hosting, so a paid managed platform is an equally legitimate
+option, and the OR1 host is chosen in PR 8. The checklist below is
+**infrastructure readiness for this stack**; it is not the OR1 acceptance gate,
+which is a product gate and lives in that document.
 
 Staging stays where it is: Northflank + Supabase, documented in
 [northflank-supabase.md](northflank-supabase.md), unchanged by any of this. A

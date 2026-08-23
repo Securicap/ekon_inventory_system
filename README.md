@@ -60,6 +60,36 @@ dashboard, no design system. **Stock adjustment is not implemented** — recordi
 that stock left is not correcting a balance that was wrong — and adjustments and
 counts are the workflows that follow.
 
+## Where this is going
+
+Everything above describes **what the software does today**. It is not the
+architecture it is being built into, and the difference matters to anybody
+reading the code for the first time.
+
+Ekon is becoming a **retail merchandise and inventory operations system**: a
+product carries a brand and a classification as structured data, a variant/SKU
+is the smallest sellable and stockable identity and owns its own price, cost,
+stock, and history, and a physical count is reconciled through the ledger rather
+than typed over a balance. The current `catalog` model — a product with
+free-text key/value attributes, no brand, no classification, no price, no cost,
+and a lifecycle nothing sets — is **not** the final domain architecture, and
+neither is today's generic `Remove → SOLD`, which records that stock left and is
+not a sales design.
+
+The milestone that direction is aimed at is **OR1**: safe and useful enough to
+become the store's real day-to-day inventory system while development continues.
+Hosted staging has passed its own launch invariant for the loop described above;
+that is a tested baseline for the earlier model and is not OR1.
+
+What is unchanged, and is the foundation the rest is built on: the append-only
+movement ledger, balances as a projection, operation-id idempotency,
+server-owned before/after quantities, and immutable generated SKUs.
+
+Read [docs/03-architecture/retail-domain-and-or1.md](docs/03-architecture/retail-domain-and-or1.md)
+before changing the merchandise model. The decisions are
+[ADR 11](docs/07-decisions/0011-retail-merchandise-and-inventory-operations.md)
+and [ADR 12](docs/07-decisions/0012-operational-release-one.md).
+
 ---
 
 ## Getting started
@@ -171,9 +201,12 @@ Full detail: [docs/04-database/invariants.md](docs/04-database/invariants.md).
 
 ## Offline
 
-Offline operation is a real requirement and is the **next major milestone**, not
-part of this one. The first release requires connectivity to submit and read
-data. What it does guarantee today:
+Offline operation is a real requirement, and it now sits **after OR1** rather
+than immediately next: the merchandise correction and the OR1 milestone come
+first, because a shop that cannot use the system at all does not benefit from
+being able to use it without internet. Nothing about _how_ offline would work
+has changed. The first release requires connectivity to submit and read data.
+What it does guarantee today:
 
 - connectivity failures are clearly visible, never silent;
 - forms keep what was typed, in `localStorage`, across a failure or a reload;
