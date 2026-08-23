@@ -11,6 +11,7 @@ import {
 } from '@ekon/shared';
 import {
   defaultMigrationsDir,
+  loadMigrations,
   migrateUp,
   migrationStatus,
 } from '../../src/platform/db/migrator.js';
@@ -472,9 +473,14 @@ describe('migration 0008 — ordinary stock removal', () => {
 
 describe('migration 0008 on a clean database', () => {
   let db: TestDatabase;
+  /** The newest migration in the checkout. Read, not pinned: this suite is about
+   *  0008 arriving on an empty database, and a later migration must not make it
+   *  fail. What 0008 itself produces is asserted below, by name. */
+  let head: string;
 
   beforeAll(async () => {
     db = await createTestDatabase({ migrate: false });
+    head = (await loadMigrations()).at(-1)!.version;
   });
 
   afterAll(async () => {
@@ -484,12 +490,12 @@ describe('migration 0008 on a clean database', () => {
   it('migrates an empty database straight to head', async () => {
     const applied = await migrateUp(db.pool);
     expect(applied).toContain('0008');
-    expect(applied.at(-1)).toBe('0008');
+    expect(applied.at(-1)).toBe(head);
   });
 
   it('reports every migration as applied and unmodified', async () => {
     const status = await migrationStatus(db.pool);
-    expect(status.at(-1)?.version).toBe('0008');
+    expect(status.at(-1)?.version).toBe(head);
     for (const row of status) {
       expect(row.applied, `${row.filename} not applied`).toBe(true);
       expect(row.checksumMatches, `${row.filename} checksum drifted`).toBe(true);
