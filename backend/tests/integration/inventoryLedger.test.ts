@@ -82,6 +82,15 @@ interface MovementFields {
   quantityAfter?: number;
   previousMovementId?: string | null;
   reversesMovementId?: string | null;
+  /**
+   * The original's own type, which 0012 requires beside the pointer.
+   *
+   * Defaults to `'RECEIPT'` whenever a `reversesMovementId` is given, because
+   * that is what these fixtures reverse; a test that needs the pair to
+   * disagree with reality, or to be half-stated, sets it explicitly — `null`
+   * gives a pointer with no type.
+   */
+  reversesMovementType?: string | null;
   reasonCode?: string | null;
   note?: string | null;
   operationId?: string;
@@ -99,9 +108,9 @@ async function postMovement(chain: Chain, fields: MovementFields = {}): Promise<
     `INSERT INTO inventory_movements (
        id, variant_id, location_id, movement_type,
        quantity_delta, quantity_before, quantity_after,
-       previous_movement_id, reverses_movement_id, operation_id,
+       previous_movement_id, reverses_movement_id, reverses_movement_type, operation_id,
        reason_code, note, user_id, occurred_at, recorded_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)`,
     [
       id,
       chain.variantId,
@@ -112,6 +121,11 @@ async function postMovement(chain: Chain, fields: MovementFields = {}): Promise<
       quantityAfter,
       fields.previousMovementId ?? null,
       fields.reversesMovementId ?? null,
+      fields.reversesMovementType === undefined
+        ? fields.reversesMovementId
+          ? 'RECEIPT'
+          : null
+        : fields.reversesMovementType,
       operationId,
       fields.reasonCode ?? null,
       fields.note ?? null,
@@ -458,6 +472,104 @@ describe('reversal shape', () => {
     ).rejects.toMatchObject({
       code: UNIQUE_VIOLATION,
       constraint: 'inventory_movements_reverses_once',
+    });
+  });
+});
+
+describe('reversal integrity added by 0012', () => {
+  it('rejects a reversal of a reversal', async () => {
+    // The rule the schema previously left to the posting workflow. Two
+    // compensating movements chasing each other is not a correction of a
+    // correction: it is a way to move stock indefinitely while every row claims
+    // to be undoing something.
+    const chain = await newChain();
+    const original = await postMovement(chain, { quantityDelta: 5 });
+    const reversal = await postMovement(chain, {
+      movementType: 'REVERSAL',
+      quantityBefore: 5,
+      quantityDelta: -5,
+      previousMovementId: original,
+      reversesMovementId: original,
+      reversesMovementType: 'RECEIPT',
+    });
+
+    await expect(
+      postMovement(chain, {
+        movementType: 'REVERSAL',
+        quantityBefore: 0,
+        quantityDelta: 5,
+        previousMovementId: reversal,
+        reversesMovementId: reversal,
+        reversesMovementType: 'REVERSAL',
+      }),
+    ).rejects.toMatchObject({
+      code: CHECK_VIOLATION,
+      constraint: 'inventory_movements_reverses_not_a_reversal',
+    });
+  });
+
+  it('rejects a reversal that misreports the original movement’s type', async () => {
+    // The denormalized type exists to be constrained, not to be trusted: a
+    // composite foreign key checks it against the original row's real type, so
+    // the CHECK above cannot be satisfied by simply writing something else.
+    const chain = await newChain();
+    const original = await postMovement(chain, { quantityDelta: 5 });
+
+    await expect(
+      postMovement(chain, {
+        movementType: 'REVERSAL',
+        quantityBefore: 5,
+        quantityDelta: -5,
+        previousMovementId: original,
+        reversesMovementId: original,
+        reversesMovementType: 'ADJUSTMENT_IN',
+      }),
+    ).rejects.toMatchObject({
+      code: FOREIGN_KEY_VIOLATION,
+      constraint: 'inventory_movements_reverses_type_fk',
+    });
+  });
+
+  it('rejects a reversal that names an original without naming its type', async () => {
+    // Half a pair would let the foreign key be skipped entirely: MATCH SIMPLE
+    // does not check a key with a NULL column in it.
+    const chain = await newChain();
+    const original = await postMovement(chain, { quantityDelta: 5 });
+
+    await expect(
+      postMovement(chain, {
+        movementType: 'REVERSAL',
+        quantityBefore: 5,
+        quantityDelta: -5,
+        previousMovementId: original,
+        reversesMovementId: original,
+        reversesMovementType: null,
+      }),
+    ).rejects.toMatchObject({
+      code: CHECK_VIOLATION,
+      constraint: 'inventory_movements_reverses_pointer_complete',
+    });
+  });
+
+  it('rejects a reversal of a movement on another chain', async () => {
+    // The other rule 0012 took over from the workflow. A reversal that landed
+    // on a different shelf would move stock that was never wrong, and leave the
+    // stock that was.
+    const first = await newChain();
+    const second = await newChain();
+    const original = await postMovement(first, { quantityDelta: 5 });
+
+    await expect(
+      postMovement(second, {
+        movementType: 'REVERSAL',
+        quantityBefore: 5,
+        quantityDelta: -5,
+        reversesMovementId: original,
+        reversesMovementType: 'RECEIPT',
+      }),
+    ).rejects.toMatchObject({
+      code: FOREIGN_KEY_VIOLATION,
+      constraint: 'inventory_movements_reverses_same_chain_fk',
     });
   });
 });
