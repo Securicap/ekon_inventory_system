@@ -6,6 +6,7 @@ import { newId } from '../../platform/ids/uuidv7.js';
 import { hashPassword } from './domain/password.js';
 import {
   USER_USERNAME_UNIQUE_CONSTRAINT,
+  findUserDisplayNames,
   insertUser,
   isUniqueViolation,
 } from './infrastructure/identityRepository.js';
@@ -50,6 +51,26 @@ export interface IdentityUserService {
    * `CONFLICT` when the username is taken.
    */
   createUser(input: CreateUserRequest): Promise<CreatedUser>;
+  /**
+   * The display names of a known set of user ids, in bulk.
+   *
+   * The one thing another module may ask about a person, and it exists because
+   * a stock movement records who posted it and a screen showing that movement
+   * has to be able to say who. It is deliberately not a user lookup: no role,
+   * no status, no username, no credential, nothing that could be composed into
+   * an account listing this module has decided not to offer yet.
+   *
+   * **An id that resolves to nothing is absent from the result rather than an
+   * error.** `inventory_movements.user_id` has no foreign key onto `users`
+   * (INV-11) — movements predate the identity module and some carry actor uuids
+   * that were never accounts. The caller keeps the permanent id and reports no
+   * name; no name is invented to fill the gap.
+   *
+   * Deactivated users resolve normally: their name has to stay readable on
+   * every movement they posted, which is why INV-16 deactivates rather than
+   * deletes.
+   */
+  findUserDisplayNames(userIds: string[]): Promise<{ id: string; displayName: string }[]>;
 }
 
 export function createIdentityUserService(deps: UserServiceDeps): IdentityUserService {
@@ -57,6 +78,8 @@ export function createIdentityUserService(deps: UserServiceDeps): IdentityUserSe
   const generateId = deps.generateId ?? newId;
 
   return {
+    findUserDisplayNames: (userIds) => findUserDisplayNames(pool, userIds),
+
     async createUser(input) {
       /**
        * Hashing first, and outside anything that holds a row.

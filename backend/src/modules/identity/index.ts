@@ -9,7 +9,7 @@ import {
 } from './authService.js';
 import { installAccessEnforcement } from './enforcement.js';
 import { registerIdentityRoutes } from './routes.js';
-import { createIdentityUserService } from './userService.js';
+import { createIdentityUserService, type IdentityUserService } from './userService.js';
 
 /**
  * The identity module's composition entry point. The application root calls
@@ -30,6 +30,12 @@ import { createIdentityUserService } from './userService.js';
  * The composition root does that, and a test asserts an undeclared route fails
  * to register.
  *
+ * It returns both of the module's application services. `auth` is what the
+ * enforcement hook was built from; `users` is what another module calls when it
+ * has a permanent user id and needs a name to show beside it — stock history
+ * being the first. Neither is a way past enforcement: both are ordinary
+ * services, and every route that reaches them was declared and checked.
+ *
  * The initial-owner bootstrap is exported but not registered: it has no HTTP
  * surface and is run by an operator command.
  *
@@ -46,12 +52,12 @@ export function registerIdentity(
     generateId?: AuthServiceDeps['generateId'];
     generateSessionToken?: AuthServiceDeps['generateSessionToken'];
   },
-): IdentityAuthService {
+): { auth: IdentityAuthService; users: IdentityUserService } {
   const service = createIdentityAuthService(deps);
   const users = createIdentityUserService(deps);
   installAccessEnforcement(app, service);
   registerIdentityRoutes(app, service, users, deps.config.NODE_ENV);
-  return service;
+  return { auth: service, users };
 }
 
 /**

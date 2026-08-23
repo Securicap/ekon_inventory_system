@@ -14,6 +14,7 @@ import {
 } from './domain/variantSignature.js';
 import {
   findStockableVariant,
+  findVariantLabels,
   getProductById,
   insertProduct,
   insertProductClassifications,
@@ -35,6 +36,7 @@ import {
   type DimensionRecord,
   type StockableVariant,
   type StockableVariantListing,
+  type VariantLabel,
 } from './infrastructure/catalogRepository.js';
 
 /**
@@ -91,6 +93,22 @@ export interface CatalogService {
    * anything inventory knows, and decides nothing about stock.
    */
   listStockableVariants(): Promise<StockableVariantListing[]>;
+  /**
+   * Labels for a known set of variant ids, in bulk, **regardless of whether any
+   * of them may be stocked today**.
+   *
+   * The third question the inventory module asks this one, and the first that
+   * is about the past. `listStockableVariants` answers "what can we hold stock
+   * of", which is a present-tense operational question and filters accordingly;
+   * stock history is evidence, and a movement against merchandise the shop has
+   * since retired is exactly the record somebody goes looking for. Answering
+   * history from the stockable list would silently drop it.
+   *
+   * An unknown id is absent from the result rather than an error. The caller
+   * holds permanent ledger ids and decides what a missing label means; the
+   * catalog does not get to decide that a movement is unreadable.
+   */
+  findVariantLabels(variantIds: string[]): Promise<VariantLabel[]>;
 }
 
 /** A SKU collision is astronomically unlikely; a few retries is ample and bounded. */
@@ -343,6 +361,7 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
     getMetadata,
     findStockableVariant: (variantId) => findStockableVariant(pool, variantId),
     listStockableVariants: () => listStockableVariants(pool),
+    findVariantLabels: (variantIds) => findVariantLabels(pool, variantIds),
   };
 }
 

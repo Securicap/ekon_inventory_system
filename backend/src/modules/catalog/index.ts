@@ -33,4 +33,5 @@ export type { CatalogService } from './service.js';
 export type {
   StockableVariant,
   StockableVariantListing,
+  VariantLabel,
 } from './infrastructure/catalogRepository.js';
