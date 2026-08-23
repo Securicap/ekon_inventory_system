@@ -153,6 +153,7 @@ function toRecord(
     recordedAt: entry.recordedAt.toISOString(),
     operationId: entry.operationId,
     reversesMovementId: entry.reversesMovementId,
+    reversedByMovementId: entry.reversedByMovementId,
     variant: variant
       ? {
           id: variant.id,

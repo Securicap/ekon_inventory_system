@@ -40,6 +40,15 @@ export interface LedgerEntry {
   note: string | null;
   operationId: string;
   reversesMovementId: string | null;
+  /**
+   * The `REVERSAL` that undid this movement, if one exists.
+   *
+   * Read back through the unique index on `reverses_movement_id` rather than
+   * stored: the ledger keeps one pointer, on the reversal, and this is that
+   * same relationship followed the other way. A movement can have at most one,
+   * which is what makes a single left join the whole answer (INV-2).
+   */
+  reversedByMovementId: string | null;
   userId: string;
   occurredAt: Date;
   recordedAt: Date;
@@ -82,6 +91,7 @@ interface MovementHistoryRow {
   note: string | null;
   operation_id: string;
   reverses_movement_id: string | null;
+  reversed_by_movement_id: string | null;
   user_id: string;
   occurred_at: Date;
   recorded_at: Date;
@@ -127,36 +137,51 @@ export async function listMovementHistory(
     return `$${params.length}`;
   };
 
-  if (filter.variantId !== undefined) conditions.push(`variant_id = ${bind(filter.variantId)}`);
-  if (filter.locationId !== undefined) conditions.push(`location_id = ${bind(filter.locationId)}`);
+  // Every condition names the `m` alias. The query left-joins the reversal of
+  // each movement, so an unqualified `id` or `recorded_at` would be ambiguous —
+  // and, worse, could silently bind to the joined reversal instead of the row
+  // being filtered.
+  if (filter.variantId !== undefined) conditions.push(`m.variant_id = ${bind(filter.variantId)}`);
+  if (filter.locationId !== undefined) {
+    conditions.push(`m.location_id = ${bind(filter.locationId)}`);
+  }
   if (filter.movementType !== undefined) {
-    conditions.push(`movement_type = ${bind(filter.movementType)}`);
+    conditions.push(`m.movement_type = ${bind(filter.movementType)}`);
   }
   if (filter.recordedFrom !== undefined) {
-    conditions.push(`recorded_at >= ${bind(filter.recordedFrom)}`);
+    conditions.push(`m.recorded_at >= ${bind(filter.recordedFrom)}`);
   }
   if (filter.recordedTo !== undefined) {
-    conditions.push(`recorded_at <= ${bind(filter.recordedTo)}`);
+    conditions.push(`m.recorded_at <= ${bind(filter.recordedTo)}`);
   }
   if (filter.after !== undefined) {
     // Row-value comparison, so the pair is compared as one position rather than
     // as two conditions that would need an OR to be correct.
     conditions.push(
-      `(recorded_at, id) < (${bind(filter.after.recordedAt)}::timestamptz, ${bind(filter.after.id)}::uuid)`,
+      `(m.recorded_at, m.id) < (${bind(filter.after.recordedAt)}::timestamptz, ${bind(filter.after.id)}::uuid)`,
     );
   }
 
   const where = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
 
+  // The left join answers "was this movement reversed?" for the whole page in
+  // the page's own query. It is not an N+1 and cannot become one: there is no
+  // per-row lookup, and `UNIQUE (reverses_movement_id)` (0005) means the join
+  // matches at most one row per movement, so it can neither multiply the page
+  // nor need a DISTINCT. That unique constraint is also the index the join
+  // probes, which is why a page costs the same as it did before the column
+  // existed.
   const { rows } = await db.query<MovementHistoryRow>(
-    `SELECT id, variant_id, location_id, movement_type,
-            quantity_delta, quantity_before, quantity_after,
-            reason_code, note, operation_id, reverses_movement_id,
-            user_id, occurred_at, recorded_at,
-            recorded_at::text AS recorded_at_exact
-       FROM inventory_movements
+    `SELECT m.id, m.variant_id, m.location_id, m.movement_type,
+            m.quantity_delta, m.quantity_before, m.quantity_after,
+            m.reason_code, m.note, m.operation_id, m.reverses_movement_id,
+            r.id AS reversed_by_movement_id,
+            m.user_id, m.occurred_at, m.recorded_at,
+            m.recorded_at::text AS recorded_at_exact
+       FROM inventory_movements m
+       LEFT JOIN inventory_movements r ON r.reverses_movement_id = m.id
       ${where}
-      ORDER BY recorded_at DESC, id DESC
+      ORDER BY m.recorded_at DESC, m.id DESC
       LIMIT ${bind(filter.limit)}`,
     params,
   );
@@ -177,6 +202,7 @@ function toEntry(row: MovementHistoryRow): LedgerEntry {
     note: row.note,
     operationId: row.operation_id,
     reversesMovementId: row.reverses_movement_id,
+    reversedByMovementId: row.reversed_by_movement_id,
     userId: row.user_id,
     occurredAt: row.occurred_at,
     recordedAt: row.recorded_at,
