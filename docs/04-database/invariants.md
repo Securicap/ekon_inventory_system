@@ -184,9 +184,23 @@ operations (0005). No delete endpoint exists.
 
 ## INV-13 — SKUs are unique and immutable
 
-_Enforcement (planned):_ `UNIQUE (sku)`, plus a trigger rejecting any update
-that changes it. SKUs are printed on physical shelf labels; changing the format
-after labels exist is a physical-world migration.
+_Enforcement:_ `UNIQUE (sku)` and a `BEFORE UPDATE` trigger raising
+`restrict_violation` on any change to the column, both in 0002. SKUs are printed
+on physical shelf labels; changing the format after labels exist is a
+physical-world migration.
+
+**A barcode does not replace a SKU, and never will.** `variant_barcodes` (0009)
+holds external identifiers attached to a variant — a manufacturer's or
+distributor's code, which may be absent, may be reused across unrelated goods,
+may change between production runs, and may exist several at a time for one
+item. None of that is true of the SKU, which is why the SKU stays the system's
+own handle on a variant and a barcode is an alternate lookup key onto it.
+
+Uniqueness there is deliberately weaker, and the weakness is the point: a
+barcode is unique **per variant**, not globally. A global unique index would
+assert a guarantee the world does not honour, and the first time two genuinely
+different items shipped under one code the database would refuse to record the
+truth.
 
 ## INV-14 — A credential is never stored in a form it can be read back from
 
@@ -250,3 +264,34 @@ would make this bite on the ledger too. It is deliberately not in 0007: existing
 movements carry arbitrary test actor UUIDs, and how permanent history gets
 connected to real users is a decision the authentication series makes on its own
 terms rather than smuggling into the migration that first creates `users`.
+
+## INV-17 — A stored amount is minor units and a currency, or it is nothing
+
+Money is never a float, never a bare number, and never half-stated. A variant's
+selling price and its reference cost are each a `bigint` count of minor units
+plus an explicit uppercase three-letter currency code, and either both columns
+of a pair are set or neither is.
+
+_Enforcement:_ `bigint` columns, `CHECK (amount IS NULL OR amount >= 0)`,
+`CHECK ((amount IS NULL) = (currency IS NULL))`, and
+`CHECK (currency IS NULL OR currency ~ '^[A-Z]{3}$')` on
+`product_variants.selling_price_*` and `product_variants.reference_cost_*`
+(0009). `scripts/check-conventions.mjs` additionally rejects `real`,
+`double precision`, `float4`, `float8`, and `money` in any migration.
+
+The currency check is a **shape and not a list**. Which currencies the business
+accepts is an operational question, and a list committed to the schema would
+turn accepting one more into a migration. Price and cost carry separate
+currencies because this shop routinely buys in one and sells in another.
+
+_Rationale:_ `NULL` means nobody has established the amount yet, which is the
+state every variant that predates 0009 is in. Zero would mean the item is free,
+or cost nothing to acquire. Backfilling zeroes to avoid a nullable column would
+have replaced an honest absence with a number that reports as fact.
+
+**`reference_cost_*` is not inventory valuation.** It is one mutable figure per
+variant, overwritten the next time the shop buys the same item at a different
+price, and it does not know which units on the shelf came from which purchase.
+Nothing may read it and call the result profit. Historical costing needs cost
+carried on receipts and consumed by depletions — a ledger change, and post-OR1
+work.
