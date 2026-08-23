@@ -244,13 +244,17 @@ export const productVariantSchema = z.object({
    * be shared with unrelated goods (INV-13).
    */
   barcodes: z.array(z.string()),
-  lifecycleStatus: lifecycleStatusSchema,
   /**
-   * **Stockability, and the only flag that governs it today.** Distinct from
-   * `lifecycleStatus`, which is merchandise policy and is inert until PR 5
-   * builds the lifecycle workflow and resolves the two into one.
+   * **The merchandise lifecycle, and the only thing that governs what may be
+   * done with this variant.** `product_variants.is_active` is gone (0012): the
+   * bridge 0009 opened between a boolean and a lifecycle is closed, and there
+   * is one authority rather than two adjacent ones.
+   *
+   * What a status permits is **effective**, combining this with the parent
+   * product's — a variant is never more available than its product. See
+   * `Product.lifecycleStatus`.
    */
-  isActive: z.boolean(),
+  lifecycleStatus: lifecycleStatusSchema,
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
@@ -265,9 +269,23 @@ export const productSchema = z.object({
   brand: brandSchema.nullable(),
   /** Ordered by dimension key. Empty for merchandise nobody has classified yet. */
   classifications: z.array(productClassificationSchema),
+  /**
+   * The merchandise lifecycle of the product itself, and the ceiling on every
+   * variant beneath it.
+   *
+   * | effective status | receive | issue | count | current stock | history |
+   * | ---------------- | ------- | ----- | ----- | ------------- | ------- |
+   * | `ACTIVE`         | yes     | yes   | yes   | shown         | shown   |
+   * | `DISCONTINUED`   | no      | yes   | yes   | shown         | shown   |
+   * | `ARCHIVED`       | no      | no    | no    | not shown     | shown   |
+   *
+   * The effective status of a variant is the **more restrictive** of its own
+   * and this one, so an `ACTIVE` variant of a `DISCONTINUED` product behaves as
+   * discontinued and one of an `ARCHIVED` product behaves as archived. Child
+   * rows are not rewritten to make that true — it is derived, so restoring the
+   * product restores exactly what it withdrew.
+   */
   lifecycleStatus: lifecycleStatusSchema,
-  /** See `ProductVariant.isActive`: the stockability bridge, not the lifecycle. */
-  isActive: z.boolean(),
   variants: z.array(productVariantSchema),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -282,6 +300,74 @@ export const createProductResponseSchema = productSchema;
 export const listProductsResponseSchema = z.array(productSchema);
 
 export type ListProductsResponse = z.infer<typeof listProductsResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+/**
+ * `PATCH /api/catalog/products/:productId/lifecycle` and
+ * `PATCH /api/catalog/variants/:variantId/lifecycle`.
+ *
+ * **The client states the lifecycle it wants, and nothing else.** Not a
+ * boolean, not an "archive" verb, not a reason, not a timestamp, not an id in
+ * the body — the id is in the path, where a route parameter cannot disagree
+ * with a payload. `.strict()` refuses the rest, `isActive` included: it is not
+ * a field this system has any more, and a body still sending one is a client
+ * that has not been updated rather than a request to honour.
+ *
+ * Declarative rather than imperative on purpose. `{"lifecycleStatus":
+ * "DISCONTINUED"}` says what the merchandise should be, so re-sending it is a
+ * no-op and two people pressing the same button do not produce two different
+ * outcomes. A `POST /discontinue` would be a verb per transition, and the
+ * transition matrix would be spread across the URL space instead of stated
+ * once.
+ *
+ * Which transitions are permitted is the catalog's rule, not this schema's: the
+ * forward path `ACTIVE → DISCONTINUED → ARCHIVED`, the corrective steps
+ * `DISCONTINUED → ACTIVE` and `ARCHIVED → DISCONTINUED`, and nothing else. A
+ * refused transition is a `409`, and archiving merchandise that still holds
+ * stock is a `409` as well. See the catalog module README for the matrix and
+ * the reasoning.
+ *
+ * There is no operation id and no `operations` row. Lifecycle is not a stock
+ * movement — it moves no quantity and posts nothing to the ledger — and a
+ * declarative state assignment is already idempotent: applying it twice leaves
+ * exactly the state applying it once left.
+ */
+export const updateLifecycleRequestSchema = z
+  .object({
+    lifecycleStatus: lifecycleStatusSchema,
+  })
+  .strict();
+
+export type UpdateLifecycleRequest = z.infer<typeof updateLifecycleRequestSchema>;
+
+/**
+ * The path parameters of the two lifecycle routes.
+ *
+ * A path parameter is request input like any other, and an unparsed one is an
+ * unvalidated one: `/api/catalog/products/not-a-uuid/lifecycle` would otherwise
+ * reach the database and come back as an internal error about uuid syntax
+ * rather than as the `400` it is. Parsed with the same schemas the bodies use,
+ * so an id is an id wherever it arrives from.
+ */
+export const productLifecycleParamsSchema = z.object({ productId: z.string().uuid() }).strict();
+
+export const variantLifecycleParamsSchema = z.object({ variantId: z.string().uuid() }).strict();
+
+/**
+ * What a lifecycle change answers with: the merchandise, as it now stands.
+ *
+ * The whole product for a product change and the whole variant for a variant
+ * change — the same shapes the catalog already returns, rather than a bespoke
+ * `{ id, lifecycleStatus }` acknowledgement. A screen that has just withdrawn
+ * something re-renders it, and a second shape of "a product" would be a second
+ * thing to keep in step with the first.
+ */
+export const updateProductLifecycleResponseSchema = productSchema;
+
+export const updateVariantLifecycleResponseSchema = productVariantSchema;
 
 // ---------------------------------------------------------------------------
 // Merchandise vocabulary

@@ -1,6 +1,6 @@
 import type { RemoveStockRequest, RemoveStockResponse } from '@ekon/shared';
 import type { PostedMovement } from './infrastructure/ledgerRepository.js';
-import type { DatabasePool } from '../../platform/db/pool.js';
+import type { DatabaseClient, DatabasePool } from '../../platform/db/pool.js';
 import { conflict, notFound } from '../../platform/http/errors.js';
 import type { CatalogService } from '../catalog/index.js';
 import { REMOVAL_OPERATION_TYPE, removalRequestHash } from './domain/removalRequestHash.js';
@@ -26,7 +26,8 @@ import type { LedgerService, OperationClaim } from './ledgerService.js';
  * second-guessed here. What this file owns is the five things the engine cannot
  * know:
  *
- *  1. that the variant and the location are real and still stockable;
+ *  1. that the variant and the location are real, and that the merchandise may
+ *     still have stock **taken off** it;
  *  2. what the canonical business command *was*, so a retry can be recognized;
  *  3. that removal means an `ISSUE` of a **negative** quantity, whatever the
  *     request wanted;
@@ -69,8 +70,15 @@ export interface RemovalServiceDeps {
    * The catalog's application service. Variants belong to the catalog module,
    * so this module asks it rather than querying `product_variants` — narrowed
    * to the one question removal has, so the dependency is visible in the type.
+   *
+   * **A different question from receiving's, and that is the point.** Removal
+   * asks whether stock may be *issued*, which is true of discontinued
+   * merchandise and false of archived; receiving asks whether stock may be
+   * *received*, which is false of both. Each workflow is given only its own
+   * question, so neither can answer with the other's rule and quietly refuse a
+   * sale of something the shop simply stopped reordering.
    */
-  catalog: Pick<CatalogService, 'findStockableVariant'>;
+  catalog: Pick<CatalogService, 'findVariantForIssue'>;
 }
 
 export interface RemovalService {
@@ -129,11 +137,14 @@ export function createRemovalService(deps: RemovalServiceDeps): RemovalService {
     const alreadyPosted = await deps.ledger.findCompletedMovement(claim);
     if (alreadyPosted) return toResult(alreadyPosted);
 
-    // Business validation, not foreign-key roulette. Both of these would
+    // Business validation, not foreign-key roulette: an unknown location would
     // eventually fail at the database, but as a constraint violation inside a
-    // transaction: a 500 that says nothing about which id was wrong, to a
+    // transaction — a 500 that says nothing about which id was wrong, to a
     // person at a counter who can only fix it if they are told.
-    await assertVariantIsStockable(request.variantId);
+    //
+    // The **variant** is checked inside the posting transaction instead, as a
+    // precondition, so a lifecycle change cannot commit between the check and
+    // the movement. See `assertMayIssue`.
     await assertLocationIsStockable(request.locationId);
 
     const movement = await deps.ledger.postMovement({
@@ -169,6 +180,7 @@ export function createRemovalService(deps: RemovalServiceDeps): RemovalService {
       note: null,
       userId: actorId,
       occurredAt,
+      precondition: assertMayIssue(request.variantId),
     });
 
     // Whichever way the engine answered — a fresh post, or a replay resolved by
@@ -178,22 +190,34 @@ export function createRemovalService(deps: RemovalServiceDeps): RemovalService {
     return toResult(movement);
   }
 
-  async function assertVariantIsStockable(variantId: string): Promise<void> {
-    const variant = await deps.catalog.findStockableVariant(variantId);
-    if (!variant) throw notFound('Product variant');
-    // `isActive` is the catalog's answer about stockability, not a column: it
-    // is false for a retired variant *and* for a live variant whose product was
-    // withdrawn. Which of the two it was is the catalog's business, and this
-    // workflow refuses the stock-out either way.
-    //
-    // Unstockable is a conflict rather than a 404: the variant plainly exists,
-    // and telling somebody holding the last two bottles that it does not would
-    // send them looking for a typo instead of for whoever retired the item.
-    if (!variant.isActive) {
-      throw conflict(
-        'This product variant is no longer active and stock cannot be removed from it',
-      );
-    }
+  /**
+   * The lifecycle rule, as a check the posting engine runs inside its own
+   * transaction — where it takes a lock on the merchandise, so a concurrent
+   * lifecycle change and this stock-out cannot cross unnoticed.
+   *
+   * **`ACTIVE` and `DISCONTINUED` both pass**, and that is the difference that
+   * made the old single flag untenable. Discontinuing something is a decision
+   * about replenishment, not about the units already on the shelf: they are
+   * still sold, and a system that refused to record it would not stop the sale
+   * — it would only stop knowing about it. `ARCHIVED` is refused, deliberately
+   * and not merely because archived merchandise has no stock to issue: the
+   * lifecycle is enforced on its own terms rather than left to be implied by a
+   * quantity.
+   *
+   * Refused is a conflict rather than a 404: the variant plainly exists, and
+   * telling somebody holding the last two bottles that it does not would send
+   * them looking for a typo instead of for whoever withdrew the item.
+   */
+  function assertMayIssue(variantId: string) {
+    return async (tx: DatabaseClient): Promise<void> => {
+      const variant = await deps.catalog.findVariantForIssue(tx, variantId);
+      if (!variant) throw notFound('Product variant');
+      if (!variant.permitted) {
+        throw conflict(
+          `This product variant is ${variant.lifecycleStatus} and stock cannot be removed from it`,
+        );
+      }
+    };
   }
 
   async function assertLocationIsStockable(locationId: string): Promise<void> {

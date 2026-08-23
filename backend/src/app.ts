@@ -8,7 +8,7 @@ import { REQUEST_ID_HEADER, errorCodeSchema, type HealthResponse } from '@ekon/s
 import type { Config } from './config/index.js';
 import { registerCatalog } from './modules/catalog/index.js';
 import { registerIdentity } from './modules/identity/index.js';
-import { registerInventory } from './modules/inventory/index.js';
+import { createStockPresenceService, registerInventory } from './modules/inventory/index.js';
 import { currentSchemaVersion } from './platform/db/migrator.js';
 import type { DatabasePool } from './platform/db/pool.js';
 import { AppError, isMalformedJsonBodyError } from './platform/http/errors.js';
@@ -226,8 +226,18 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   // above — the modules themselves check nothing and know nobody's role.
   //
   // Catalog first: the inventory module asks it whether a variant may be
-  // stocked, and asks through its application service rather than its tables.
-  const catalog = registerCatalog(app, { pool, clock });
+  // received into, issued from, or corrected, and asks through its application
+  // service rather than its tables.
+  //
+  // The dependency runs the other way too, and this is where the loop is
+  // resolved rather than papered over. Archiving merchandise must not be
+  // possible while stock remains, and stock is the inventory module's to know —
+  // so the catalog declares a narrow `StockPresenceReader` port and is handed
+  // inventory's implementation of it here. That implementation depends on
+  // nothing (no pool, no clock, no other service), which is precisely why it can
+  // be built first and why neither module ends up importing the other's tables.
+  const stock = createStockPresenceService();
+  const { catalog } = registerCatalog(app, { pool, clock, stock });
   registerInventory(app, { pool, clock, catalog, identity: identity.users });
 
   if (serveFrontend) {

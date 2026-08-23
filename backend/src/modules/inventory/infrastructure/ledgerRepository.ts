@@ -19,7 +19,8 @@ import { AppError } from '../../../platform/http/errors.js';
  * transaction to run in. No write is widened this way, and none should be.
  *
  * There is no update or delete of a movement row here, and there never will be
- * — the database refuses both (INV-1). Corrections are compensating movements.
+ * — the database refuses both (INV-1). Corrections are compensating movements,
+ * and `insertReversal` below is what appends one.
  */
 
 /** Read-only access: the pool, or a transaction already in progress. */
@@ -117,6 +118,43 @@ export interface InsertMovementParams {
   previousMovementId: string | null;
   operationId: string;
   reasonCode: string | null;
+  note: string | null;
+  userId: string;
+  occurredAt: Date;
+  recordedAt: Date;
+}
+
+/**
+ * A reversal insert. The same row as any other movement, plus the pointer that
+ * makes it a correction rather than an opposite movement that happens to look
+ * like one.
+ *
+ * Deliberately a separate shape from {@link InsertMovementParams}: every field
+ * here that names the original — the id, its type, and the derived
+ * `quantityDelta` — is read off the original row inside the transaction and can
+ * never be supplied by a caller. Widening the ordinary params with optional
+ * reversal fields would have made "which movement does this reverse" an
+ * optional question on every insert in the system.
+ */
+export interface InsertReversalParams {
+  id: string;
+  variantId: string;
+  locationId: string;
+  /** `-original.quantityDelta`. Derived by the engine, never by a request. */
+  quantityDelta: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  previousMovementId: string | null;
+  operationId: string;
+  /** The movement being reversed. */
+  reversesMovementId: string;
+  /**
+   * That movement's own type, stored so the database can enforce that a
+   * `REVERSAL` is never reversed (0012). Not application data: a constraint's
+   * working column, checked by a composite foreign key against the original
+   * row's real type, so it cannot be a convenient lie.
+   */
+  reversesMovementType: MovementType;
   note: string | null;
   userId: string;
   occurredAt: Date;
@@ -314,6 +352,133 @@ export async function insertMovement(
   // Unreachable: the insert either returns its row or throws.
   if (!row) throw new Error('Movement insert returned no row');
   return toMovement(row);
+}
+
+/**
+ * Appends one `REVERSAL`, linked to the movement it compensates.
+ *
+ * The only statement in the system that writes `reverses_movement_id`, and it
+ * writes `reverses_movement_type` beside it so the database can refuse a
+ * reversal of a reversal (0012). Between them, four constraints then hold
+ * without this code being trusted: the original is a real movement, on this
+ * reversal's own chain, of the type recorded here, and not itself a reversal —
+ * and `UNIQUE (reverses_movement_id)` means no second reversal of it can ever
+ * be appended, however the attempt arrives (INV-2).
+ *
+ * `reason_code` is NULL and is not a parameter. A reversal carries its reason in
+ * the movement it reverses; the ledger's own CHECK requires a code for issues
+ * and adjustments only (INV-11), and inventing one here would put a word in the
+ * ledger that nobody chose.
+ *
+ * Read back with RETURNING rather than reconstructed from the parameters, like
+ * every other insert here: if a constraint or a default ever disagrees with
+ * what the service computed, the caller sees the stored truth.
+ */
+export async function insertReversal(
+  tx: DatabaseClient,
+  params: InsertReversalParams,
+): Promise<PostedMovement> {
+  const { rows } = await tx.query<MovementRow>(
+    `INSERT INTO inventory_movements (
+       id, variant_id, location_id, movement_type,
+       quantity_delta, quantity_before, quantity_after,
+       previous_movement_id, reverses_movement_id, reverses_movement_type, operation_id,
+       reason_code, note, user_id, occurred_at, recorded_at)
+     VALUES ($1, $2, $3, 'REVERSAL', $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12, $13, $14)
+     RETURNING id, variant_id, location_id, movement_type,
+               quantity_delta, quantity_before, quantity_after,
+               previous_movement_id, reverses_movement_id, operation_id,
+               reason_code, note, user_id, occurred_at, recorded_at`,
+    [
+      params.id,
+      params.variantId,
+      params.locationId,
+      params.quantityDelta,
+      params.quantityBefore,
+      params.quantityAfter,
+      params.previousMovementId,
+      params.reversesMovementId,
+      params.reversesMovementType,
+      params.operationId,
+      params.note,
+      params.userId,
+      params.occurredAt,
+      params.recordedAt,
+    ],
+  );
+  const row = rows[0];
+  // Unreachable: the insert either returns its row or throws.
+  if (!row) throw new Error('Reversal insert returned no row');
+  return toMovement(row);
+}
+
+/**
+ * The reversal of a given movement, if one has already been appended.
+ *
+ * A read of the unique index `UNIQUE (reverses_movement_id)`, so at most one row
+ * can ever come back. It exists to turn "this was already corrected" into a
+ * `409` that says so, rather than a constraint violation surfacing as a `500`.
+ *
+ * **It is not the protection.** Two callers can both read `null` here; the
+ * unique constraint is what makes exactly one of their inserts succeed, and the
+ * caller runs this read *after* taking the chain's balance lock so that a
+ * committed reversal is already visible. Belt, braces, and the braces are in
+ * the database.
+ */
+export async function findReversalOf(
+  tx: DatabaseClient,
+  originalMovementId: string,
+): Promise<PostedMovement | null> {
+  const { rows } = await tx.query<MovementRow>(
+    `SELECT id, variant_id, location_id, movement_type,
+            quantity_delta, quantity_before, quantity_after,
+            previous_movement_id, reverses_movement_id, operation_id,
+            reason_code, note, user_id, occurred_at, recorded_at
+       FROM inventory_movements
+      WHERE reverses_movement_id = $1`,
+    [originalMovementId],
+  );
+  const row = rows[0];
+  return row ? toMovement(row) : null;
+}
+
+/**
+ * True when `error` is the unique violation raised by a second reversal of one
+ * movement.
+ *
+ * Named here, beside the insert that can raise it, so the workflow can answer a
+ * lost race with the same `409` it would have given had it seen the existing
+ * reversal — instead of an opaque `500` about a constraint the caller has never
+ * heard of.
+ */
+export function isDuplicateReversalViolation(error: unknown): boolean {
+  return uniqueViolationConstraint(error) === REVERSES_ONCE_CONSTRAINT;
+}
+
+/** `UNIQUE (reverses_movement_id)` — one movement is reversed at most once (0005). */
+const REVERSES_ONCE_CONSTRAINT = 'inventory_movements_reverses_once';
+
+/** Postgres unique-violation SQLSTATE. */
+const UNIQUE_VIOLATION = '23505';
+
+/**
+ * The name of the violated unique constraint when `error` is a Postgres unique
+ * violation, otherwise null. The catalog repository has the same helper for the
+ * same reason: distinguishing one expected collision from a real failure
+ * without swallowing anything.
+ */
+function uniqueViolationConstraint(error: unknown): string | null {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === UNIQUE_VIOLATION &&
+    'constraint' in error &&
+    typeof (error as { constraint?: unknown }).constraint === 'string'
+  ) {
+    return (error as { constraint: string }).constraint;
+  }
+  return null;
 }
 
 /** Reads one movement back, used to answer a replayed operation. */

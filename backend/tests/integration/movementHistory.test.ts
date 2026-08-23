@@ -4,6 +4,7 @@ import {
   movementHistoryPageSchema,
   MOVEMENT_HISTORY_MAX_PAGE_SIZE,
   type InventoryMovementRecord,
+  type LifecycleStatus,
 } from '@ekon/shared';
 import { buildApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config/index.js';
@@ -57,8 +58,8 @@ function nextSku(): string {
 async function newFixture(
   options: {
     brand?: string;
-    productActive?: boolean;
-    variantActive?: boolean;
+    productLifecycle?: LifecycleStatus;
+    variantLifecycle?: LifecycleStatus;
     locationActive?: boolean;
     productName?: string;
   } = {},
@@ -75,13 +76,13 @@ async function newFixture(
 
   const productId = newId();
   await db.pool.query(
-    `INSERT INTO products (id, name, brand_id, is_active, created_at, updated_at)
+    `INSERT INTO products (id, name, brand_id, lifecycle_status, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $5)`,
     [
       productId,
       options.productName ?? 'History fixture',
       brandId,
-      options.productActive ?? true,
+      options.productLifecycle ?? 'ACTIVE',
       NOW,
     ],
   );
@@ -89,9 +90,9 @@ async function newFixture(
   const variantId = newId();
   await db.pool.query(
     `INSERT INTO product_variants
-       (id, product_id, sku, variant_signature, is_active, created_at, updated_at)
+       (id, product_id, sku, variant_signature, lifecycle_status, created_at, updated_at)
      VALUES ($1, $2, $3, '[["color","black"]]', $4, $5, $5)`,
-    [variantId, productId, nextSku(), options.variantActive ?? true, NOW],
+    [variantId, productId, nextSku(), options.variantLifecycle ?? 'ACTIVE', NOW],
   );
   await db.pool.query(
     `INSERT INTO variant_attributes (variant_id, attribute_name, attribute_value)
@@ -335,8 +336,11 @@ describe('labels are current, not historical snapshots', () => {
 });
 
 describe('history that the current-stock view would hide', () => {
-  it('reads a movement against retired merchandise', async () => {
-    const fixture = await newFixture({ productActive: false, variantActive: false });
+  it('reads a movement against archived merchandise', async () => {
+    const fixture = await newFixture({
+      productLifecycle: 'ARCHIVED',
+      variantLifecycle: 'ARCHIVED',
+    });
     const movementId = await postMovement({
       fixture,
       movementType: 'RECEIPT',
@@ -348,7 +352,7 @@ describe('history that the current-stock view would hide', () => {
 
     const { items } = await page(`?variantId=${fixture.variantId}`);
     expect(items.map((item) => item.id)).toEqual([movementId]);
-    // Fully labelled, not merely present: `listStockableVariants` would have
+    // Fully labelled, not merely present: `listOperationalVariants` would have
     // dropped this variant, which is why history does not use it.
     expect(items[0]?.variant.productName).toBe('History fixture');
   });

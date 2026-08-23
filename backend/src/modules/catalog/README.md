@@ -109,36 +109,95 @@ and classification values are created as a side effect of entering merchandise,
 and attribute names grow by migration, so there is nothing here for a management
 endpoint to manage.
 
+### `PATCH /api/catalog/products/:productId/lifecycle` — withdraw or restore a product
+
+### `PATCH /api/catalog/variants/:variantId/lifecycle` — the same, for one SKU
+
+```jsonc
+// request
+{ "lifecycleStatus": "DISCONTINUED" }
+
+// 200 OK — the product (or the variant) as it now stands
+```
+
+Requires **`catalog.deactivate`**, not `catalog.write`. The narrower capability
+already existed for exactly this: deciding what the business stops selling is a
+different authority from entering what it sells, and somebody trusted to type in
+a new sandal is not thereby trusted to withdraw the range.
+
+**Declarative, not imperative.** The body says what the merchandise should be,
+so sending it twice changes nothing the second time and two people pressing the
+same button agree. A `POST /discontinue` would be a verb per transition, with
+the matrix spread across the URL space instead of stated once.
+
+`.strict()` refuses everything else, `isActive` included — it is not a field
+this system has any more. The id is in the path and refused in the body: two
+statements of one identity can disagree, and the one that would win is the one
+nobody reads. A malformed id is a `400` rather than an internal error about uuid
+syntax, because the path is parsed with a shared schema like any other input.
+
+There is no operation id and no `operations` row. Lifecycle is not a stock
+movement — it moves no quantity and posts nothing to the ledger — and a
+declarative state assignment is already idempotent.
+
+Separate routes for a product and a variant rather than one endpoint taking
+either, because they are separate decisions about separate things. Withdrawing
+the product already governs every variant beneath it through the effective rule,
+so nothing cascades and nothing needs to.
+
+Refusals: `404` for merchandise that does not exist, `409` for a transition the
+matrix does not permit and for an archive blocked by remaining stock, `403`
+without the capability, `401` without a session.
+
 ## What other modules ask this one
 
 The catalog owns every table listed at the top of this file, and no other module
-may query them — the lint rule enforces the boundary. Two questions cross it
-today, both as calls on `CatalogService`, and neither of them decides anything
-about stock:
+may query them — the lint rule enforces the boundary. Four questions cross it,
+all as calls on `CatalogService`, and none of them decides anything about stock:
 
-- `findStockableVariant(id)` — does this variant exist, and may it still be
-  stocked? Asked by receiving and by removal before either posts. One row, three
-  columns.
-- `listStockableVariants()` — every variant that may currently be stocked, with
-  the product name, SKU, and attributes needed to label one. Asked by the
-  inventory module to build the current stock view, which composes it with its
-  own locations and balances.
+- `findVariantForReceiving(tx, id)` — may stock be **booked in** against this?
+- `findVariantForIssue(tx, id)` — may stock be **taken off the shelf**?
+- `findVariantForCorrection(tx, id)` — may its recorded history be **corrected**
+  (adjusted, or a movement reversed)?
+- `listOperationalVariants()` — every variant still in day-to-day operation,
+  with the product name, SKU, and attributes needed to label one. Asked by the
+  inventory module to build the current stock view.
 
-Both apply the **same** stockability rule, and it is the catalog's rule rather
-than each caller's:
+A fifth, `findVariantLabels(ids)`, answers a different kind of question
+entirely: what merchandise is _called_, for reading history, **regardless of
+lifecycle**. Evidence is not filtered by present-tense availability — a movement
+against merchandise the shop has since archived is exactly the record somebody
+goes looking for.
 
-> A variant is stockable only when the variant **and its parent product** are
-> both active.
+### Three questions, not one flag
 
-`listStockableVariants` applies it as a filter — an active variant under a
-withdrawn product is not something the business sells, so it is not listed, and
-it returns no `is_active` at all. `findStockableVariant` cannot filter, because
-"unstockable" and "no such variant" are different answers and its callers turn
-them into different statuses; it returns the rule's result instead. **Its
-`isActive` is therefore effective stockability, not the
-`product_variants.is_active` column** — false for a retired variant and equally
-false for a live variant under a retired product. Callers are not told which,
-because no caller does anything different about it.
+`findStockableVariant` and its `isActive` are gone, and so is the boolean behind
+them. One flag could say only "available", which was enough while one boolean
+governed everything and is wrong now: **discontinued merchandise may be sold and
+counted and corrected, but not replenished.** A single question would have
+forced each workflow to interpret the answer, and receiving and removal would be
+interpreting it separately — which is how two workflows quietly disagree about
+what the shop sells.
+
+So each workflow names what it is about to do, and each service's dependency is
+narrowed to its own question (`Pick<CatalogService, 'findVariantForReceiving'>`).
+Receiving cannot reach the issue rule even by accident: the type does not have
+it.
+
+All four answer from **effective lifecycle** — the stricter of the variant's own
+status and its parent product's — and never from a raw column. The
+eligibility calls return `{ id, productId, lifecycleStatus, permitted }`;
+`null` still means only "no such variant", which callers turn into a `404` while
+`permitted: false` becomes a `409`. Which of the two rows caused the refusal is
+deliberately not reported, because no caller does anything different about it.
+
+### They take a transaction, and they lock
+
+The three singular questions take the caller's transaction client and read the
+product and variant rows `FOR SHARE`. That is not a detail of the current call
+site: it is what makes archive safety an invariant rather than a hope. A
+lifecycle change takes `FOR UPDATE` on the same rows, so it and a movement
+cannot cross unnoticed — see [Lifecycle](#lifecycle) below and INV-19.
 
 Ordering for the list is fixed here — product name, SKU, then variant id — so
 every consumer sees the same one.
@@ -264,23 +323,134 @@ Uniqueness is per variant, not global — deliberately, because manufacturer
 codes are reused in the real world and a global constraint would refuse to
 record the truth (INV-13).
 
-### Lifecycle is read, and nothing sets it
+### Lifecycle
 
-`ACTIVE → DISCONTINUED → ARCHIVED`, on both products and variants. New
-merchandise is written `ACTIVE`, `lifecycleStatus` is on the wire, and **there is
-no endpoint that changes it.** A quantity reaching zero is **not** a lifecycle
-change: selling the last unit is a fact about a shelf, discontinuing is a
-decision about merchandise.
+```text
+ACTIVE  ⇄  DISCONTINUED  ⇄  ARCHIVED
+```
 
-**`is_active` is still the only flag that decides stockability.**
-`findStockableVariant` and `listStockableVariants` are unchanged, so receiving
-and removal behave exactly as they did before 0009, and archiving a product
-changes nothing about what may be stocked — a test asserts it. Two columns for
-adjacent notions is a bridge and not a design, and it is why both are on the
-wire: `isActive` is stockability today, `lifecycleStatus` is merchandise policy.
-Making lifecycle authoritative before anything can set it would change what may
-be received underneath merchandise nobody has reviewed. **PR 5** builds the
-lifecycle workflow and resolves the two into one.
+`lifecycle_status` on both `products` and `product_variants` is now the **only**
+authority on merchandise availability. `is_active` was the bridge 0009 opened
+deliberately and 0012 closed: both columns are dropped, and there is one notion
+of withdrawn rather than two adjacent ones that get checked in different places.
+
+#### What each status permits
+
+| effective status | receive | issue | count | correct | current stock | history |
+| ---------------- | ------- | ----- | ----- | ------- | ------------- | ------- |
+| `ACTIVE`         | yes     | yes   | yes   | yes     | shown         | shown   |
+| `DISCONTINUED`   | **no**  | yes   | yes   | yes     | **shown**     | shown   |
+| `ARCHIVED`       | no      | no    | no    | no      | not shown     | shown   |
+
+`DISCONTINUED` means **no longer bought or reordered, and nothing else**.
+Receiving is refused because replenishing something the business decided to stop
+stocking is the one act the decision was about; everything else stays open. The
+units on the shelf are sold to real customers, counted at stocktake, and shown
+on the stock screen. A system that made discontinued merchandise invisible would
+strand it — and stranded stock is sold anyway, off the books, which is worse
+than not discontinuing it at all.
+
+`ARCHIVED` means out of day-to-day operation, retained for history. It leaves
+the current-stock view, which is honest only because **archiving is refused
+while any stock remains**.
+
+**A quantity reaching zero is not a lifecycle change.** Selling the last unit is
+a fact about a shelf; discontinuing is a decision about merchandise. Nothing in
+this system promotes one into the other, in either direction.
+
+Corrections get their own column in that table for a reason: a correction
+concerns ledger truth rather than replenishment, so `DISCONTINUED` must never
+block one — discontinuing something on Friday cannot make Thursday's mis-keyed
+receipt permanent. `ARCHIVED` does block one, because it would put units back on
+a shelf the archive asserts is empty. The remedy is explicit rather than
+implied: restore it to `DISCONTINUED`, correct the ledger, archive it again.
+
+#### Effective status: a variant is never more available than its product
+
+The effective status of a variant is the **stricter** of its own and its parent
+product's. An `ACTIVE` variant of a `DISCONTINUED` product behaves as
+discontinued; one of an `ARCHIVED` product behaves as archived. The reverse is
+the ordinary case and is left alone: a `DISCONTINUED` variant under an `ACTIVE`
+product is one colour the shop stopped buying, and its siblings are unaffected.
+
+**Derived, not propagated.** Withdrawing a product does not rewrite its
+variants' rows — because then restoring it could not know which of them the shop
+had already discontinued on their own, and the mass update would have erased
+exactly the information needed to undo itself. The rule is one function,
+`effectiveLifecycle` in `domain/lifecycle.ts`, and every query and every
+workflow goes through it rather than remembering how to combine two statuses.
+
+#### The transition matrix
+
+| from → to      | `ACTIVE`      | `DISCONTINUED` | `ARCHIVED`            |
+| -------------- | ------------- | -------------- | --------------------- |
+| `ACTIVE`       | no-op         | yes            | yes, if stock is zero |
+| `DISCONTINUED` | yes, restores | no-op          | yes, if stock is zero |
+| `ARCHIVED`     | **no**        | yes, restores  | no-op                 |
+
+`ACTIVE → ARCHIVED` skips a step on purpose: merchandise entered by mistake,
+with nothing to sell down, is archived directly rather than made to perform a
+ritual.
+
+**Restoration exists because people click the wrong row.** A one-way tombstone
+would mean the remedy for a mis-click is a database session, and a system whose
+only correction path is `psql` does not have a correction path. Both restoring
+steps go back exactly one stage, and `ARCHIVED → ACTIVE` is refused for that
+reason — coming back into day-to-day operation and being reordered again are two
+decisions, so they are two clicks. A refusal is a `409` whose message names what
+_is_ permitted.
+
+Setting the status something already has is a **no-op**: a declarative `PATCH`
+restating the current state has nothing to do and no reason to fail, and it does
+not move `updated_at` either.
+
+#### Archive safety
+
+Archiving a variant requires its total on-hand quantity across every location to
+be zero; archiving a product requires that of **every** variant beneath it, read
+in one bulk query rather than one per SKU. A refusal names how much is where,
+and the remedy is real: issue or adjust the remaining units, then archive.
+**Nothing writes stock off to get an archive through**, and the lifecycle
+workflow never posts a movement on anybody's behalf.
+
+Stock belongs to the inventory module, so the catalog does not query
+`inventory_balances`. It declares the one question it has —
+`StockPresenceReader.findVariantsHoldingStock(tx, variantIds)` — and the
+composition root hands it the inventory module's implementation. The mirror
+image of how inventory asks this module whether a variant may be stocked, and
+the reason neither ends up reaching across the boundary.
+
+**The check is not check-then-act.** Both sides take PostgreSQL row locks in one
+fixed order — `products`, then `product_variants`, then the balances:
+
+- a lifecycle change locks the merchandise rows `FOR UPDATE` and only **then**
+  reads the balances;
+- every posting workflow locks the same rows `FOR SHARE` inside its posting
+  transaction, before it touches a balance.
+
+So an archive and a receipt cannot both succeed: whichever reaches the
+merchandise row first commits, and the other sees it and is refused. They
+contend on the **catalog** row rather than the balance row, which matters
+because a shelf that has never held stock has no balance row to contend for.
+`READ COMMITTED`, no retry loop, no advisory lock, and no in-memory mutex —
+which would protect one process, and this system will not always be one process.
+`backend/tests/integration/catalogLifecycleConcurrency.test.ts` stages both
+directions of the race behind a barrier that asks PostgreSQL itself whether the
+commands are genuinely blocked. See INV-19.
+
+#### What is not recorded
+
+**A lifecycle change records no actor and no history.** The status and
+`updated_at` persist and `catalog.deactivate` is enforced, but nothing says who
+withdrew a product or when it was last restored. That belongs in `audit_events`,
+and the audit module does not exist — building a general audit subsystem for this
+one workflow would be a larger project than the workflow. The limitation is
+stated rather than worked around, and a lifecycle change is meanwhile
+attributable only through the application log.
+
+**A lifecycle change is not an inventory movement**, and no fake movement is
+posted for one. It moves no quantity, and a `RECEIPT` of zero to record a
+policy decision would corrupt the one table the whole system rests on.
 
 ### Controlled attribute names
 
@@ -334,15 +504,21 @@ a migration cannot know which installation it is on. See INV-18.
 
 ## Not yet
 
-**Lifecycle mutation.** Nothing discontinues or archives anything — PR 5.
+Product and variant updates of any kind beyond lifecycle — renaming, re-pricing,
+re-classifying, editing or removing a barcode after creation. Deletion.
+Pagination, filtering, search. Brand or vocabulary administration. Controlled
+attribute _values_. Barcode scanning. Costing beyond the single reference
+figure. Anything to do with inventory movements or balances beyond the one
+stock-presence question archive safety asks.
 
-Deactivation (products and variants carry `is_active` but nothing sets it to
-false yet — both questions above already honour both flags, so the workflow that
-lands it only has to set the column), product and variant updates of any kind,
-deletion, editing or removing a barcode after creation, pagination, filtering,
-search, brand or vocabulary administration, controlled attribute _values_,
-barcode scanning, costing beyond the single reference figure, and anything to do
-with inventory movements, balances, or the audit log.
+**Audit.** A lifecycle change records no actor and no history — see
+[What is not recorded](#what-is-not-recorded). The audit module has a README and
+no code.
+
+**Screens.** There is no lifecycle control in the interface: PR 5 is backend and
+contracts, and PR 7 builds the operational UI. The receiving screen filters its
+choices to `ACTIVE` merchandise, which is the only frontend change lifecycle
+required.
 
 Product creation still carries **no operation id and writes no `operations`
 row**, and the frontend still sends none. Nothing about that changed because the

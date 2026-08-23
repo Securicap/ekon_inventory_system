@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { fixedClock } from '../../src/platform/clock/index.js';
 import { newId } from '../../src/platform/ids/uuidv7.js';
 import { createCatalogService } from '../../src/modules/catalog/index.js';
+import { withTransaction } from '../../src/platform/db/unitOfWork.js';
 import { productRequest } from '../helpers/catalogRequests.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
 
@@ -565,21 +566,62 @@ describe('merchandise schema and constraints', () => {
       expect(rows[0]).toEqual({ product: 'ACTIVE', variant: 'DISCONTINUED' });
     });
 
-    it('leaves is_active the authority on stockability, untouched by lifecycle', async () => {
-      // The bridge 0009 documents: both columns exist, nothing reads the new
-      // one, and archiving a product does not change what the catalog reports
-      // as stockable. PR 5 resolves the two.
+    it('makes lifecycle the authority on what may be stocked', async () => {
+      // The bridge 0009 opened and 0012 closed. `is_active` is gone from both
+      // tables, and the lifecycle columns are what the catalog now answers
+      // from — including the parent product's, which is a ceiling on its
+      // variants.
       const catalog = createCatalogService({ pool: db.pool, clock: fixedClock(NOW) });
       const productId = await insertProduct();
       const variantId = await insertVariant(productId);
 
+      await withTransaction(db.pool, async (tx) => {
+        expect(await catalog.findVariantForReceiving(tx, variantId)).toMatchObject({
+          lifecycleStatus: 'ACTIVE',
+          permitted: true,
+        });
+      });
+
       await db.pool.query(`UPDATE products SET lifecycle_status = 'ARCHIVED' WHERE id = $1`, [
         productId,
       ]);
-      expect(await catalog.findStockableVariant(variantId)).toMatchObject({ isActive: true });
 
-      await db.pool.query(`UPDATE products SET is_active = false WHERE id = $1`, [productId]);
-      expect(await catalog.findStockableVariant(variantId)).toMatchObject({ isActive: false });
+      await withTransaction(db.pool, async (tx) => {
+        // The variant's own row still says ACTIVE; its effective status does not.
+        expect(await catalog.findVariantForReceiving(tx, variantId)).toMatchObject({
+          lifecycleStatus: 'ARCHIVED',
+          permitted: false,
+        });
+        expect(await catalog.findVariantForIssue(tx, variantId)).toMatchObject({
+          permitted: false,
+        });
+      });
+    });
+
+    it('no longer has an is_active column on products or variants', async () => {
+      // The whole point of retiring the bridge: one authority, not two adjacent
+      // ones. A column nothing reads is a column somebody starts reading again.
+      const { rows } = await db.pool.query<{ table_name: string }>(
+        `SELECT table_name
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND column_name = 'is_active'
+            AND table_name IN ('products', 'product_variants')`,
+      );
+      expect(rows).toEqual([]);
+    });
+
+    it('keeps is_active where it is a different fact entirely', async () => {
+      // Users and locations are untouched: whether a person may sign in
+      // (INV-16) and whether a shelf is open (0004) are not merchandise
+      // lifecycle, and neither has a lifecycle column to be reconciled with.
+      const { rows } = await db.pool.query<{ table_name: string }>(
+        `SELECT table_name
+           FROM information_schema.columns
+          WHERE table_schema = 'public' AND column_name = 'is_active'
+          ORDER BY table_name`,
+      );
+      expect(rows.map((row) => row.table_name)).toEqual(['inventory_locations', 'users']);
     });
   });
 

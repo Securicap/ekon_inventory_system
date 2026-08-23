@@ -85,9 +85,9 @@ called "Users" that cannot list any would be a lie about what is behind it.
 Each inventory door has its own key, and the keys are not interchangeable:
 Stock on **`inventory.read`**, Receiving on **`inventory.receive`**, Removal on
 **`inventory.remove`**. Somebody may hold any combination, and neither write
-door opens on the read capability or on the other's. `inventory.adjust` opens
-nothing at all — correcting a balance that was wrong is not recording that stock
-left, and that screen does not exist.
+door opens on the read capability or on the other's. `inventory.adjust` and
+`inventory.reverse` open nothing here — correcting a balance that was wrong is
+not recording that stock left, both have an API and neither has a screen yet.
 
 **A hidden link is not a security boundary.** Capabilities arrive from `/me` and
 live in a browser, where anything can be edited. Every request is checked again
@@ -458,10 +458,14 @@ to invalidate would be a dependency pointing the wrong way.
 - **anything about stock beyond what is on the shelf now.** No movement history,
   no audit drawer, no low-stock threshold or colour, no reorder point, no
   valuation, no cost, and no supplier — and no sorting, paging, or export;
-- **adjustments.** Removal records that stock _left_; an adjustment records that
-  the _balance was wrong_, and it has its own capability, its own permanent
-  movement type, and no API or screen at all. `inventory.adjust` opens nothing;
-- physical counts and reversal;
+- **adjustments and reversal.** Removal records that stock _left_; an adjustment
+  records that the _balance was wrong_, and a reversal undoes one movement by
+  appending its compensation. Both have their own capability, their own
+  permanent movement type, and an API — and no screen, which is PR 7;
+- **lifecycle control.** Merchandise is withdrawn and restored through the API;
+  the receiving screen filters its choices to `ACTIVE` merchandise, and there is
+  no screen that changes a status;
+- physical counts;
 - **any sales domain.** `SOLD` is a removal reason. There is no sale, order,
   customer, price, payment, tax, receipt, or refund, and none is planned here;
 - **catalog management beyond creating a product.** The form creates one and

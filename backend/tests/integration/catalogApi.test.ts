@@ -60,8 +60,10 @@ describe('POST /api/catalog/products', () => {
     const product = createProductResponseSchema.parse(body);
     expect(product.name).toBe('Bottled Water');
     expect(product.description).toBeNull();
-    expect(product.isActive).toBe(true);
+    // Lifecycle is the only availability flag on the wire: `isActive` was the
+    // bridge 0009 opened and 0012 removed, and `.strict()` refuses it now.
     expect(product.lifecycleStatus).toBe('ACTIVE');
+    expect(product).not.toHaveProperty('isActive');
     expect(product.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(product.createdAt).toBe('2026-08-03T12:00:00.000Z');
     expect(product.updatedAt).toBe('2026-08-03T12:00:00.000Z');
@@ -79,7 +81,7 @@ describe('POST /api/catalog/products', () => {
     expect(variant?.referenceCost).toBeNull();
     expect(variant?.barcodes).toEqual([]);
     expect(variant?.lifecycleStatus).toBe('ACTIVE');
-    expect(variant?.isActive).toBe(true);
+    expect(variant).not.toHaveProperty('isActive');
     expect(variant?.productId).toBe(product.id);
   });
 
@@ -288,8 +290,9 @@ describe('GET /api/catalog/products', () => {
     const products = listProductsResponseSchema.parse(response.json());
 
     expect(products.map((p) => p.name)).toEqual(['First', 'Second']);
-    // Active and inactive status is reported even though deactivation is not built.
-    expect(products.every((p) => p.isActive === true)).toBe(true);
+    // New merchandise begins ACTIVE, and lifecycle is the only status reported.
+    expect(products.every((p) => p.lifecycleStatus === 'ACTIVE')).toBe(true);
+    expect(products.every((p) => !('isActive' in p))).toBe(true);
 
     // Attributes ordered by normalized name.
     expect(products[0]?.variants[0]?.attributes).toEqual([

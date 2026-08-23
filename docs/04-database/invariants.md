@@ -32,10 +32,41 @@ _Enforcement:_ `UNIQUE (reverses_movement_id)` prevents double reversal (0005),
 together with CHECKs requiring a `REVERSAL` to name its original, forbidding any
 other type from naming one, and forbidding a movement from reversing itself.
 
-_Planned:_ the delta is computed server-side from the original row inside the
-transaction and is never supplied by the client. A `REVERSAL` cannot itself be
-reversed, and it must belong to the same chain as its original — both are
-lookups, so they belong to the posting engine.
+0012 adds the two rules 0005 left to the posting workflow, as foreign keys
+rather than as conventions:
+
+- **Same chain.** `(reverses_movement_id, variant_id, location_id) → (id,
+variant_id, location_id)`, against the unique key 0005 already created for the
+  predecessor pointer. A reversal cannot land on a different shelf from the
+  movement it names.
+- **A `REVERSAL` cannot be reversed.** The original's type is stored beside the
+  pointer in `reverses_movement_type` and constrained three ways: the pair is
+  complete or both NULL, the recorded type is not `REVERSAL`, and
+  `(reverses_movement_id, reverses_movement_type) → (id, movement_type)` proves
+  the recorded type is the named movement's real one. The column is a
+  constraint's working column, not application data — the same technique 0009
+  uses for `product_classifications.dimension_id`.
+
+_Implemented:_ `postReversal` in
+`backend/src/modules/inventory/ledgerService.ts` is the only path that writes a
+`REVERSAL`. It reads the original inside the transaction and derives the
+variant, the location, and the delta from it; the request schema
+(`reverseMovementRequestSchema`) refuses all three, so no client can state one.
+
+**A reversal is applied to the _current_ balance, not to the quantity that
+followed the original movement.** Reversing a receipt of 10 that has since had 3
+issued against it would leave −3, and is refused with `INSUFFICIENT_STOCK`
+(INV-8) rather than clamped or partially applied — the later movements are
+corrected first. The existence of a historical receipt is not permission to
+break the stock floor.
+
+Merchandise lifecycle constrains corrections narrowly and deliberately:
+`DISCONTINUED` merchandise can always have its history corrected — discontinuing
+something on Friday must not make Thursday's mis-keyed receipt permanent —
+while `ARCHIVED` merchandise cannot, because a correction would put stock behind
+a status that asserts there is none (INV-19). Restoring it to `DISCONTINUED`
+first is explicit, and no workflow ever changes a lifecycle to get its own write
+through.
 
 ## INV-3 — Before and after quantities are arithmetically consistent
 
@@ -151,6 +182,17 @@ anybody can act on, and sold, broken, and consumed internally are three
 different things. A receipt carries its reason in its type, a count in the
 count, and a reversal in the movement it reverses.
 
+**The two reason vocabularies are separate and share only `OTHER`.**
+`REMOVAL_REASONS` (`SOLD`, `DAMAGED`, `INTERNAL_USE`, `OTHER`) say why stock
+physically left; `ADJUSTMENT_REASONS` (`DATA_ENTRY_ERROR`, `MISSED_MOVEMENT`,
+`OTHER`) say why the recorded quantity was wrong. `SOLD` is therefore never an
+adjustment reason: a sale nobody recorded is a `MISSED_MOVEMENT`, and a shop
+that could not tell those apart could not tell trade from bookkeeping.
+`OTHER` requires a note on an adjustment, because it is the one reason that says
+nothing on its own. Neither vocabulary is in the database: both live in
+`@ekon/shared` so they can grow without a migration, and the column is bounded
+text (0005).
+
 `occurred_at` is business time — when the stock physically moved — and is stated
 by the caller. `recorded_at` is server time — when the posting engine recorded
 the event — and is read from the injected clock inside the transaction, never
@@ -181,6 +223,15 @@ none.
 _Enforcement:_ `ON DELETE RESTRICT` on every foreign key from
 `inventory_movements` and `inventory_balances` onto catalog rows, locations, and
 operations (0005). No delete endpoint exists.
+
+For merchandise, "deactivated" now means a **lifecycle status** and nothing
+else. `products.is_active` and `product_variants.is_active` were dropped by
+0012, and `lifecycle_status` is the sole authority — one notion of withdrawn
+rather than two adjacent ones that get checked in different places. See INV-19
+for what each status permits. `users.is_active` (INV-16) and
+`inventory_locations.is_active` (0004) are untouched: whether a person may sign
+in and whether a shelf is open for business are different facts about different
+things, and neither is merchandise lifecycle.
 
 ## INV-13 — SKUs are unique and immutable
 
@@ -341,3 +392,71 @@ Attribute **values** are deliberately not controlled. `Black` is display text,
 normalized for identity and stored with its case preserved (0003); a controlled
 option set for every attribute of every kind of merchandise is the
 over-engineering trap this schema has avoided twice already.
+
+## INV-19 — Merchandise lifecycle governs what may be done, and archived merchandise holds no stock
+
+`ACTIVE → DISCONTINUED → ARCHIVED`, on both `products` and `product_variants`,
+with `DISCONTINUED → ACTIVE` and `ARCHIVED → DISCONTINUED` as the corrective
+steps back. A variant's **effective** status is the more restrictive of its own
+and its parent product's, derived rather than propagated — withdrawing a product
+does not rewrite its variants' rows, so restoring it restores exactly what it
+withdrew.
+
+| effective status | receive | issue | count | correct | current stock | history |
+| ---------------- | ------- | ----- | ----- | ------- | ------------- | ------- |
+| `ACTIVE`         | yes     | yes   | yes   | yes     | shown         | shown   |
+| `DISCONTINUED`   | **no**  | yes   | yes   | yes     | **shown**     | shown   |
+| `ARCHIVED`       | no      | no    | no    | no      | not shown     | shown   |
+
+**A quantity reaching zero is not a lifecycle change**, and nothing in this
+system promotes one into the other. Selling the last unit is a fact about a
+shelf; discontinuing is a decision about merchandise (ADR 11).
+
+**`DISCONTINUED` merchandise stays operationally visible.** That is the whole
+content of the status: replenishment stops, trading does not. Hiding it would
+strand stock the business owns and is still selling, and stranded stock leaves
+the shelf anyway — with the ledger the only thing that does not know.
+
+**Archiving requires zero stock**, across every location, and for a product
+across every one of its variants. Archived merchandise leaves the day-to-day
+stock view, which is honest only because there is nothing left on a shelf to
+hide.
+
+_Enforcement:_ this one is application-and-lock, not a CHECK, and the boundary
+is worth stating exactly. A cross-table aggregate ("this variant's balances sum
+to zero") is not expressible as a row constraint, and a trigger that read the
+catalog on every balance update would put a cross-module read on the hot path of
+every movement in the system.
+
+What makes it hold is a **lock protocol both sides observe**, in one fixed
+order — `products`, then `product_variants`, then the balances:
+
+- a lifecycle change (`backend/src/modules/catalog/lifecycleService.ts`) takes
+  `FOR UPDATE` on the merchandise rows and only **then** reads the balances,
+  through the inventory module's narrow `StockPresenceReader` port;
+- every posting workflow takes `FOR SHARE` on the same rows inside its posting
+  transaction, before it touches a balance, through
+  `CatalogService.findVariantFor{Receiving,Issue,Correction}`.
+
+So an archive and a movement cannot cross unnoticed: whichever gets the
+merchandise row first commits, and the other sees it and is refused. They
+contend on the **catalog** row rather than the balance row, which matters
+because a shelf that has never held stock has no balance row to contend for —
+exactly the case an archive is most likely to meet. `READ COMMITTED`, no retry
+loop, no advisory lock, and no in-memory mutex (which would protect one process,
+and this system will not always be one process).
+
+_Verified by:_
+`backend/tests/integration/catalogLifecycleConcurrency.test.ts`, which stages
+both directions behind a barrier that asks PostgreSQL itself whether the
+commands are really blocked, and
+`backend/tests/integration/catalogLifecycle.test.ts` for the matrix and the
+per-status behaviour.
+
+_Limitation, stated rather than worked around:_ **a lifecycle change records no
+actor and no history.** The status and `updated_at` are persisted and the
+capability is enforced, but nothing says who withdrew a product or when it was
+last restored. That belongs in `audit_events`, and the audit module does not
+exist yet — building a general audit subsystem for this one workflow would be a
+larger project than the workflow. Until it lands, a lifecycle change is
+attributable only through the application log.

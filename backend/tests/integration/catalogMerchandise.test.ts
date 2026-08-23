@@ -12,6 +12,7 @@ import { fixedClock } from '../../src/platform/clock/index.js';
 import { AppError } from '../../src/platform/http/errors.js';
 import { newId } from '../../src/platform/ids/uuidv7.js';
 import { createCatalogService, type CatalogService } from '../../src/modules/catalog/index.js';
+import { withTransaction } from '../../src/platform/db/unitOfWork.js';
 import { productRequest } from '../helpers/catalogRequests.js';
 import { createTestSession, type TestSession } from '../helpers/authSession.js';
 import { createTestDatabase, type TestDatabase } from '../helpers/testDb.js';
@@ -464,26 +465,69 @@ describe('GET /api/catalog/metadata', () => {
   });
 });
 
-describe('the lifecycle bridge', () => {
-  it('does not let lifecycle decide what may be stocked', async () => {
-    // PR 5 owns lifecycle control. Until then `is_active` is the authority, and
-    // archiving a product must not change what receiving accepts — the
-    // application has no way to set lifecycle, so a rule reading it would fire
-    // on merchandise nobody had reviewed.
+describe('lifecycle is the authority', () => {
+  it("answers each workflow's own question about what may be done", async () => {
+    // The bridge is closed: `is_active` is gone from both tables, and these
+    // three questions are what replaced a single boolean. They are separate
+    // because their answers genuinely differ — discontinued merchandise may be
+    // sold and corrected but not replenished — and because a workflow given
+    // only its own question cannot accidentally apply another's rule.
     const product = createProductResponseSchema.parse(
-      (await post({ name: 'Archived', variants: [{}] })).body,
+      (await post({ name: 'Lifecycle Subject', variants: [{}] })).body,
+    );
+    const variantId = product.variants[0]!.id;
+
+    const eligibility = async (): Promise<Record<string, boolean>> =>
+      withTransaction(db.pool, async (tx) => ({
+        receive: (await catalog.findVariantForReceiving(tx, variantId))!.permitted,
+        issue: (await catalog.findVariantForIssue(tx, variantId))!.permitted,
+        correct: (await catalog.findVariantForCorrection(tx, variantId))!.permitted,
+      }));
+
+    expect(await eligibility()).toEqual({ receive: true, issue: true, correct: true });
+    expect((await catalog.listOperationalVariants()).some((v) => v.id === variantId)).toBe(true);
+
+    await db.pool.query(`UPDATE products SET lifecycle_status = 'DISCONTINUED' WHERE id = $1`, [
+      product.id,
+    ]);
+    // No longer replenished; still sold, still countable, still correctable,
+    // and still on the current-stock list.
+    expect(await eligibility()).toEqual({ receive: false, issue: true, correct: true });
+    expect((await catalog.listOperationalVariants()).some((v) => v.id === variantId)).toBe(true);
+
+    await db.pool.query(`UPDATE products SET lifecycle_status = 'ARCHIVED' WHERE id = $1`, [
+      product.id,
+    ]);
+    // Out of day-to-day operation entirely, and off the operational list —
+    // which is only safe because archiving is refused while stock remains.
+    expect(await eligibility()).toEqual({ receive: false, issue: false, correct: false });
+    expect((await catalog.listOperationalVariants()).some((v) => v.id === variantId)).toBe(false);
+  });
+
+  it('never lets a variant be more available than its product', async () => {
+    // The effective rule, derived rather than propagated: the variant's own row
+    // still says ACTIVE throughout, and withdrawing the product does not
+    // rewrite it — which is what makes restoring the product restore exactly
+    // what it withdrew.
+    const product = createProductResponseSchema.parse(
+      (await post({ name: 'Parent Ceiling', variants: [{}] })).body,
     );
     const variantId = product.variants[0]!.id;
 
     await db.pool.query(`UPDATE products SET lifecycle_status = 'ARCHIVED' WHERE id = $1`, [
       product.id,
     ]);
-    expect(await catalog.findStockableVariant(variantId)).toMatchObject({ isActive: true });
-    expect((await catalog.listStockableVariants()).some((v) => v.id === variantId)).toBe(true);
 
-    await db.pool.query(`UPDATE products SET is_active = false WHERE id = $1`, [product.id]);
-    expect(await catalog.findStockableVariant(variantId)).toMatchObject({ isActive: false });
-    expect((await catalog.listStockableVariants()).some((v) => v.id === variantId)).toBe(false);
+    const effective = await withTransaction(db.pool, (tx) =>
+      catalog.findVariantForIssue(tx, variantId),
+    );
+    expect(effective).toMatchObject({ lifecycleStatus: 'ARCHIVED', permitted: false });
+
+    const { rows } = await db.pool.query<{ lifecycle_status: string }>(
+      `SELECT lifecycle_status FROM product_variants WHERE id = $1`,
+      [variantId],
+    );
+    expect(rows[0]?.lifecycle_status).toBe('ACTIVE');
   });
 
   it('keeps the shared vocabulary equal to the database CHECK', async () => {
@@ -500,7 +544,7 @@ describe('the lifecycle bridge', () => {
 describe('what the inventory module sees', () => {
   it('is unchanged by the merchandise model', async () => {
     const product = createProductResponseSchema.parse((await post(BEL_AMI)).body);
-    const listing = await catalog.listStockableVariants();
+    const listing = await catalog.listOperationalVariants();
 
     expect(listing).toEqual([
       {

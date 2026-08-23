@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { REMOVAL_REASONS, removeStockResponseSchema, type ErrorBody } from '@ekon/shared';
+import {
+  REMOVAL_REASONS,
+  removeStockResponseSchema,
+  type ErrorBody,
+  type LifecycleStatus,
+} from '@ekon/shared';
 import { buildApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config/index.js';
 import { REMOVAL_OPERATION_TYPE } from '../../src/modules/inventory/index.js';
@@ -59,24 +64,24 @@ function nextSku(): string {
 /** A fresh product, variant, and location: one isolated movement chain. */
 async function newChain(
   options: {
-    variantActive?: boolean;
-    productActive?: boolean;
+    variantLifecycle?: LifecycleStatus;
+    productLifecycle?: LifecycleStatus;
     locationActive?: boolean;
   } = {},
 ): Promise<Chain> {
   const productId = newId();
   await db.pool.query(
-    `INSERT INTO products (id, name, is_active, created_at, updated_at)
+    `INSERT INTO products (id, name, lifecycle_status, created_at, updated_at)
      VALUES ($1, 'Removal fixture', $2, $3, $3)`,
-    [productId, options.productActive ?? true, RECORDED_AT],
+    [productId, options.productLifecycle ?? 'ACTIVE', RECORDED_AT],
   );
 
   const variantId = newId();
   await db.pool.query(
     `INSERT INTO product_variants
-       (id, product_id, sku, variant_signature, is_active, created_at, updated_at)
+       (id, product_id, sku, variant_signature, lifecycle_status, created_at, updated_at)
      VALUES ($1, $2, $3, '[]', $4, $5, $5)`,
-    [variantId, productId, nextSku(), options.variantActive ?? true, RECORDED_AT],
+    [variantId, productId, nextSku(), options.variantLifecycle ?? 'ACTIVE', RECORDED_AT],
   );
 
   const locationId = newId();
@@ -89,24 +94,28 @@ async function newChain(
   return { productId, variantId, locationId };
 }
 
-/** Retires a variant, as a catalog deactivation will once it exists. */
-async function deactivateVariant(chain: Chain): Promise<void> {
-  await db.pool.query(`UPDATE product_variants SET is_active = false WHERE id = $1`, [
+/**
+ * Sets a variant's lifecycle, as `PATCH .../lifecycle` does.
+ *
+ * Written straight to the table rather than through the endpoint: this suite is
+ * about what removal does with a lifecycle, and going through the API would
+ * drag its transition matrix and its zero-stock rule into every fixture here.
+ * Archiving a variant that still holds stock is refused by that workflow and is
+ * exactly the state some of these tests need to set up.
+ */
+async function setVariantLifecycle(chain: Chain, status: LifecycleStatus): Promise<void> {
+  await db.pool.query(`UPDATE product_variants SET lifecycle_status = $2 WHERE id = $1`, [
     chain.variantId,
+    status,
   ]);
 }
 
-/**
- * Withdraws the parent product, leaving its variant's own `is_active` true.
- *
- * Written straight to the table because no application path can produce this
- * state: the catalog creates and lists, and nothing deactivates anything. The
- * state is still reachable — a `psql` session, a support script, or the
- * deactivation workflow that lands later — and the invariant it violates is one
- * the ledger cannot take back, so it is tested now rather than assumed away.
- */
-async function deactivateProduct(chain: Chain): Promise<void> {
-  await db.pool.query(`UPDATE products SET is_active = false WHERE id = $1`, [chain.productId]);
+/** Withdraws the parent product, leaving its variant's own status ACTIVE. */
+async function setProductLifecycle(chain: Chain, status: LifecycleStatus): Promise<void> {
+  await db.pool.query(`UPDATE products SET lifecycle_status = $2 WHERE id = $1`, [
+    chain.productId,
+    status,
+  ]);
 }
 
 /** Closes a location, as location management will once it exists. */
@@ -466,9 +475,9 @@ describe('retrying the same removal', () => {
     expect(await operations(request.operationId as string)).toHaveLength(1);
   });
 
-  it('answers a replay after the variant has been retired', async () => {
+  it('answers a replay after the variant has been archived', async () => {
     // A settled stock-out is a fact about the past. An item sold in the morning
-    // and retired that afternoon must still answer its own retry — the stock
+    // and archived that afternoon must still answer its own retry — the stock
     // has already left the building, and a client that never saw the first
     // response would otherwise retry forever into a conflict.
     const chain = await newChain();
@@ -476,7 +485,7 @@ describe('retrying the same removal', () => {
     const request = body(chain, { quantity: 2 });
     const first = await removeOk(request);
 
-    await deactivateVariant(chain);
+    await setVariantLifecycle(chain, 'ARCHIVED');
 
     const replay = await removeOk(request);
     expect(replay).toEqual(first);
@@ -484,8 +493,8 @@ describe('retrying the same removal', () => {
     expect((await balance(chain))?.quantity_on_hand).toBe(4);
   });
 
-  it('answers a replay after the parent product has been withdrawn', async () => {
-    // Widening the stockability rule must not narrow idempotency. The settled
+  it('answers a replay after the parent product has been archived', async () => {
+    // Lifecycle becoming authoritative must not narrow idempotency. The settled
     // operation is resolved before anything is checked about the present, so a
     // sale rung up in the morning still answers its own retry in the evening
     // even if the whole product line was withdrawn in between — the stock left
@@ -495,7 +504,7 @@ describe('retrying the same removal', () => {
     const request = body(chain, { quantity: 2 });
     const first = await removeOk(request);
 
-    await deactivateProduct(chain);
+    await setProductLifecycle(chain, 'ARCHIVED');
 
     const replay = await removeOk(request);
     expect(replay).toEqual(first);
@@ -518,14 +527,14 @@ describe('retrying the same removal', () => {
     expect((await balance(chain))?.quantity_on_hand).toBe(4);
   });
 
-  it('still refuses a genuinely new removal against a variant retired since', async () => {
+  it('still refuses a genuinely new removal against a variant archived since', async () => {
     // The replay lookup answers settled operations only. A *different* command
     // — a new operation id — is judged against the shelf as it is today.
     const chain = await newChain();
     await stock(chain, 6);
     await removeOk(body(chain, { quantity: 2 }));
 
-    await deactivateVariant(chain);
+    await setVariantLifecycle(chain, 'ARCHIVED');
 
     const fresh = body(chain, { quantity: 1 });
     const { status, body: responseBody } = await remove(fresh);
@@ -685,7 +694,7 @@ describe('reusing an operation id for a different command', () => {
     const request = body(chain, { quantity: 3 });
     const first = await removeOk(request);
 
-    await deactivateVariant(chain);
+    await setVariantLifecycle(chain, 'ARCHIVED');
 
     const { status, body: responseBody } = await remove({ ...request, quantity: 4 });
     expect(status).toBe(409);
@@ -693,7 +702,7 @@ describe('reusing an operation id for a different command', () => {
 
     expect(await issues(chain)).toHaveLength(1);
     expect((await balance(chain))?.quantity_on_hand).toBe(7);
-    // And the genuine retry still answers, retired variant and all.
+    // And the genuine retry still answers, archived variant and all.
     expect(await removeOk(request)).toEqual(first);
   });
 
@@ -866,35 +875,63 @@ describe('what stock may be removed from', () => {
     expect(await movements(chain)).toHaveLength(0);
   });
 
-  it('refuses a variant that is no longer active', async () => {
-    const chain = await newChain({ variantActive: false });
+  it('allows a DISCONTINUED variant, which is the whole point of the status', async () => {
+    // The rule receiving does not share, and the reason a single availability
+    // flag could not survive PR 5. Discontinuing something is a decision about
+    // replenishment: the units already on the shelf are still sold to real
+    // customers, and refusing here would not stop the sale — it would only stop
+    // the ledger knowing about it.
+    const chain = await newChain();
+    await stock(chain, 6);
+    await setVariantLifecycle(chain, 'DISCONTINUED');
+
+    const result = await removeOk(body(chain, { quantity: 2 }));
+    expect(result.quantityAfter).toBe(4);
+    expect(await issues(chain)).toHaveLength(1);
+    expect((await balance(chain))?.quantity_on_hand).toBe(4);
+  });
+
+  it('allows a variant whose parent product is DISCONTINUED', async () => {
+    // The effective status is the stricter of the two, and `DISCONTINUED` is
+    // still issuable — so a whole line the shop stopped reordering keeps
+    // selling down its remaining stock.
+    const chain = await newChain();
+    await stock(chain, 5);
+    await setProductLifecycle(chain, 'DISCONTINUED');
+
+    const result = await removeOk(body(chain, { quantity: 5 }));
+    expect(result.quantityAfter).toBe(0);
+    expect((await balance(chain))?.quantity_on_hand).toBe(0);
+  });
+
+  it('refuses an ARCHIVED variant', async () => {
+    const chain = await newChain({ variantLifecycle: 'ARCHIVED' });
     const request = body(chain);
     const { status, body: responseBody } = await remove(request);
 
     // The variant plainly exists — a 404 would send somebody holding the last
-    // two bottles looking for a typo instead of for whoever retired the item.
+    // two bottles looking for a typo instead of for whoever archived the item.
     expect(status).toBe(409);
     expect(errorCode(responseBody)).toBe('CONFLICT');
     expect(await movements(chain)).toHaveLength(0);
     expect(await balance(chain)).toBeUndefined();
-    // Business validation ran before the operation was claimed, so the id is
-    // still free for a corrected request.
+    // The refusal happened inside the posting transaction, which rolled back
+    // with it, so the operation id is still free for a corrected request.
     expect(await operations(request.operationId as string)).toHaveLength(0);
   });
 
-  it('refuses an active variant whose parent product has been withdrawn', async () => {
-    // The catalog's rule, not this workflow's: a variant is stockable only when
-    // it *and* its product are active. The same answer receiving gives, because
-    // it is the same question — a shelf that may not take stock in may not let
-    // stock out through an ordinary issue either.
-    const chain = await newChain({ productActive: false });
+  it('refuses an ACTIVE variant whose parent product has been archived', async () => {
+    // The catalog's rule, not this workflow's: a variant is never more
+    // available than the product it belongs to, so an ACTIVE variant of an
+    // ARCHIVED product is effectively archived.
+    const chain = await newChain({ productLifecycle: 'ARCHIVED' });
     const request = body(chain);
     const { status, body: responseBody } = await remove(request);
 
-    // A `409`, exactly as for a retired variant. The variant plainly exists, so
-    // a `404` would send somebody hunting for a typo; and the distinction from
-    // a uuid nobody ever issued is the whole reason the catalog reports
-    // stockability rather than simply declining to find the row.
+    // A `409`, exactly as for an archived variant. The variant plainly exists,
+    // so a `404` would send somebody hunting for a typo; and the distinction
+    // from a uuid nobody ever issued is the whole reason the catalog reports
+    // eligibility rather than simply declining to find the row.
     expect(status).toBe(409);
     expect(errorCode(responseBody)).toBe('CONFLICT');
     expect(await movements(chain)).toHaveLength(0);
@@ -902,15 +939,16 @@ describe('what stock may be removed from', () => {
     expect(await operations(request.operationId as string)).toHaveLength(0);
   });
 
-  it('refuses a variant whose product was withdrawn after it held stock', async () => {
-    // The realistic shape of it: a shelf with stock on it, whose product is
-    // withdrawn while units are still sitting there. The refusal must leave
-    // every one of them where they are — no partial removal, no movement, no
-    // operation id spent.
+  it('refuses a variant whose product was archived after it held stock', async () => {
+    // The state archive safety exists to prevent, forced into being anyway:
+    // stock on a shelf under archived merchandise. Lifecycle is enforced on its
+    // own terms rather than left to be implied by a quantity, so the removal is
+    // refused and every unit stays exactly where it is — no partial removal, no
+    // movement, no operation id spent.
     const chain = await newChain();
     await stock(chain, 6);
 
-    await deactivateProduct(chain);
+    await setProductLifecycle(chain, 'ARCHIVED');
 
     const fresh = body(chain, { quantity: 2 });
     const { status, body: responseBody } = await remove(fresh);

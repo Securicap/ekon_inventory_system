@@ -20,6 +20,7 @@ const RECORD = {
   recordedAt: '2026-08-23T14:22:10.000Z',
   operationId: '00000000-0000-7000-8000-000000000002',
   reversesMovementId: null,
+  reversedByMovementId: null,
   variant: {
     id: '00000000-0000-7000-8000-000000000003',
     productId: '00000000-0000-7000-8000-000000000004',
@@ -179,13 +180,32 @@ describe('movement history record contract', () => {
     ).toBe(false);
   });
 
-  it('carries the reversal relationship PR 5 will populate', () => {
-    const record = inventoryMovementRecordSchema.parse({
+  it('carries the reversal relationship in both directions', () => {
+    // A reversal says what it undid; the movement it undid says it was undone.
+    // The second is the one that keeps somebody from reading a corrected
+    // receipt as stock the shop still received.
+    const reversal = inventoryMovementRecordSchema.parse({
       ...RECORD,
       movementType: 'REVERSAL',
       reversesMovementId: '00000000-0000-7000-8000-00000000000b',
     });
-    expect(record.reversesMovementId).toBe('00000000-0000-7000-8000-00000000000b');
+    expect(reversal.reversesMovementId).toBe('00000000-0000-7000-8000-00000000000b');
+    expect(reversal.reversedByMovementId).toBeNull();
+
+    const reversed = inventoryMovementRecordSchema.parse({
+      ...RECORD,
+      reversedByMovementId: '00000000-0000-7000-8000-00000000000c',
+    });
+    expect(reversed.reversedByMovementId).toBe('00000000-0000-7000-8000-00000000000c');
+    expect(reversed.reversesMovementId).toBeNull();
+  });
+
+  it('requires both reversal fields to be stated, even as null', () => {
+    // `.strict()` in both directions: a record that simply omitted "was this
+    // corrected?" would read as "no" to every client.
+    const withoutDerived = { ...RECORD };
+    delete (withoutDerived as Record<string, unknown>).reversedByMovementId;
+    expect(inventoryMovementRecordSchema.safeParse(withoutDerived).success).toBe(false);
   });
 
   it('refuses ledger internals that are not evidence', () => {

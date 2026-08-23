@@ -1,6 +1,6 @@
 import type { ReceiveStockRequest, ReceiveStockResponse } from '@ekon/shared';
 import type { PostedMovement } from './infrastructure/ledgerRepository.js';
-import type { DatabasePool } from '../../platform/db/pool.js';
+import type { DatabaseClient, DatabasePool } from '../../platform/db/pool.js';
 import { conflict, notFound } from '../../platform/http/errors.js';
 import type { CatalogService } from '../catalog/index.js';
 import { RECEIVING_OPERATION_TYPE, receivingRequestHash } from './domain/receivingRequestHash.js';
@@ -16,7 +16,8 @@ import type { LedgerService, OperationClaim } from './ledgerService.js';
  * posting engine and is not repeated, wrapped, or second-guessed here. What
  * this file owns is the four things the engine cannot know:
  *
- *  1. that the variant and the location are real and still stockable;
+ *  1. that the variant and the location are real, and that the merchandise may
+ *     still be **received into**;
  *  2. what the canonical business command *was*, so a retry can be recognized;
  *  3. that receiving means a `RECEIPT` of a positive quantity, whatever the
  *     request wanted;
@@ -51,8 +52,13 @@ export interface ReceivingServiceDeps {
    * The catalog's application service. Variants belong to the catalog module,
    * so this module asks it rather than querying `product_variants` — narrowed
    * to the one question receiving has, so the dependency is visible in the type.
+   *
+   * The narrowing is a safety property, not documentation. Receiving may ask
+   * whether merchandise can be **received into** and has no access to the issue
+   * rule, so it cannot accidentally accept a delivery against discontinued
+   * merchandise by calling the wrong lookup — the type simply does not have it.
    */
-  catalog: Pick<CatalogService, 'findStockableVariant'>;
+  catalog: Pick<CatalogService, 'findVariantForReceiving'>;
 }
 
 export interface ReceivingService {
@@ -107,11 +113,16 @@ export function createReceivingService(deps: ReceivingServiceDeps): ReceivingSer
     const alreadyPosted = await deps.ledger.findCompletedMovement(claim);
     if (alreadyPosted) return toResult(alreadyPosted);
 
-    // Business validation, not foreign-key roulette. Both of these would
+    // Business validation, not foreign-key roulette: an unknown location would
     // eventually fail at the database, but as a constraint violation inside a
-    // transaction: a 500 that says nothing about which id was wrong, to a
+    // transaction — a 500 that says nothing about which id was wrong, to a
     // person at a counter who can only fix it if they are told.
-    await assertVariantIsStockable(request.variantId);
+    //
+    // The **variant** is deliberately not checked here. Its check goes into the
+    // posting transaction as a precondition, because merchandise can be
+    // archived between a check on the pool and the write that follows it, and
+    // an archived SKU with a delivery booked into it is precisely the state
+    // archive safety exists to make impossible. See `assertMayReceive`.
     await assertLocationIsStockable(request.locationId);
 
     const movement = await deps.ledger.postMovement({
@@ -129,6 +140,7 @@ export function createReceivingService(deps: ReceivingServiceDeps): ReceivingSer
       note: null,
       userId: actorId,
       occurredAt,
+      precondition: assertMayReceive(request.variantId),
     });
 
     // Whichever way the engine answered — a fresh post, or a replay resolved by
@@ -138,20 +150,36 @@ export function createReceivingService(deps: ReceivingServiceDeps): ReceivingSer
     return toResult(movement);
   }
 
-  async function assertVariantIsStockable(variantId: string): Promise<void> {
-    const variant = await deps.catalog.findStockableVariant(variantId);
-    if (!variant) throw notFound('Product variant');
-    // `isActive` is the catalog's answer about stockability, not a column: it
-    // is false for a retired variant *and* for a live variant whose product was
-    // withdrawn. Which of the two it was is the catalog's business, and this
-    // workflow refuses the delivery either way.
-    //
-    // Unstockable is a conflict rather than a 404: the variant plainly exists,
-    // and telling somebody holding a delivery that it does not would send them
-    // looking for a typo instead of for whoever retired the item.
-    if (!variant.isActive) {
-      throw conflict('This product variant is no longer active and cannot receive stock');
-    }
+  /**
+   * The lifecycle rule, as a check the posting engine runs inside its own
+   * transaction.
+   *
+   * The catalog answers it and locks the merchandise rows while it does, so a
+   * lifecycle change and this delivery cannot cross unnoticed: one of them
+   * waits for the other and is then refused. That is the whole of archive
+   * safety on this side.
+   *
+   * **`ACTIVE` only.** `DISCONTINUED` merchandise is merchandise the business
+   * decided to stop buying, and a delivery of it is either a mistake or a
+   * decision somebody needs to make explicitly by making it active again;
+   * `ARCHIVED` is out of operation altogether. The catalog decides which
+   * statuses those are — this workflow does not interpret lifecycle, it asks a
+   * question named after what it is about to do.
+   *
+   * Refused is a conflict rather than a 404: the variant plainly exists, and
+   * telling somebody holding a delivery that it does not would send them
+   * looking for a typo instead of for whoever withdrew the item.
+   */
+  function assertMayReceive(variantId: string) {
+    return async (tx: DatabaseClient): Promise<void> => {
+      const variant = await deps.catalog.findVariantForReceiving(tx, variantId);
+      if (!variant) throw notFound('Product variant');
+      if (!variant.permitted) {
+        throw conflict(
+          `This product variant is ${variant.lifecycleStatus} and cannot receive stock`,
+        );
+      }
+    };
   }
 
   async function assertLocationIsStockable(locationId: string): Promise<void> {

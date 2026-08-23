@@ -40,20 +40,19 @@ export function userResponse(user: AuthenticatedUser = userFixture()): { user: A
 /**
  * One product with one variant, as `GET /api/catalog/products` returns it.
  *
- * `isActive` on both the product and the variant is overridable because
- * receiving has to refuse each of them separately: a retired product and a
- * discontinued size are different facts, and neither may take new stock.
- * `lifecycleStatus` is not overridable: it does not govern stockability, and a
- * fixture that let a test suggest otherwise would be documenting the wrong
- * rule.
+ * `lifecycleStatus` on both the product and the variant is overridable because
+ * receiving has to refuse each of them separately: a withdrawn line and a
+ * withdrawn size are different facts, and neither may take new stock. It is the
+ * only availability flag there is — `isActive` was the temporary bridge, and
+ * 0012 removed it from the wire along with the column behind it.
  */
 export function productFixture(
   overrides: {
     id?: string;
     name?: string;
     sku?: string;
-    isActive?: boolean;
-    variantIsActive?: boolean;
+    lifecycleStatus?: 'ACTIVE' | 'DISCONTINUED' | 'ARCHIVED';
+    variantLifecycleStatus?: 'ACTIVE' | 'DISCONTINUED' | 'ARCHIVED';
     attributes?: ReadonlyArray<{ name: string; value: string }>;
   } = {},
 ) {
@@ -67,8 +66,7 @@ export function productFixture(
     // these is a real state the API returns, not a placeholder.
     brand: null,
     classifications: [],
-    lifecycleStatus: 'ACTIVE' as const,
-    isActive: overrides.isActive ?? true,
+    lifecycleStatus: overrides.lifecycleStatus ?? ('ACTIVE' as const),
     variants: [
       {
         // A real uuid, not the product's id with a marker appended: receiving
@@ -81,8 +79,7 @@ export function productFixture(
         sellingPrice: null,
         referenceCost: null,
         barcodes: [],
-        lifecycleStatus: 'ACTIVE' as const,
-        isActive: overrides.variantIsActive ?? true,
+        lifecycleStatus: overrides.variantLifecycleStatus ?? ('ACTIVE' as const),
         createdAt: '2026-08-02T12:00:00.000Z',
         updatedAt: '2026-08-02T12:00:00.000Z',
       },

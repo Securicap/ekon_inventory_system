@@ -19,9 +19,18 @@ under the new `inventory.remove` capability, refused with `INSUFFICIENT_STOCK`
 rather than clamped when the shelf cannot cover it
 ([backend/src/modules/inventory](backend/src/modules/inventory/README.md)).
 **Stock leaving is not stock being corrected:** `ISSUE` says the stock genuinely
-went, `ADJUSTMENT_OUT` says the recorded balance was wrong, and the adjustment
-workflow is not implemented. `SOLD` is a removal reason and nothing more — there
-is no sale, customer, price, or payment anywhere in this system. The
+went, `ADJUSTMENT_OUT` says the recorded balance was wrong, and they are
+separate workflows under separate capabilities —
+`POST /api/inventory/adjust` corrects a recorded quantity under
+`inventory.adjust`, and `POST /api/inventory/reverse` undoes one wrong movement
+by appending a compensating `REVERSAL` under `inventory.reverse`, never by
+editing history. `SOLD` is a removal reason and nothing more — there is no sale,
+customer, price, or payment anywhere in this system. Merchandise now carries an
+authoritative **lifecycle** — `ACTIVE → DISCONTINUED → ARCHIVED`, set through
+`PATCH /api/catalog/{products,variants}/:id/lifecycle` under
+`catalog.deactivate` — which decides what may be received, issued, counted, and
+corrected; discontinued stock stays visible and sellable, and merchandise
+holding stock cannot be archived. The
 `identity` module holds the users, sessions, and role-capability schema, the
 first-owner bootstrap command, and now **session authentication** — sign in,
 sign out, and `GET /api/auth/me`, behind an http-only cookie carrying an opaque
@@ -56,9 +65,9 @@ a dropped connection removes the stock once. A confirmed removal refreshes the
 current-stock numbers everyone reads.
 
 The screens are a temporary shell, not the platform's visual design — no
-dashboard, no design system. **Stock adjustment is not implemented** — recording
-that stock left is not correcting a balance that was wrong — and adjustments and
-counts are the workflows that follow.
+dashboard, no design system. Adjustment, reversal, lifecycle control, and stock
+history are **API only**: the screens for them are PR 7, and physical counts are
+PR 6.
 
 ## Where this is going
 
@@ -70,11 +79,9 @@ Ekon is becoming a **retail merchandise and inventory operations system**: a
 product carries a brand and a classification as structured data, a variant/SKU
 is the smallest sellable and stockable identity and owns its own price, cost,
 stock, and history, and a physical count is reconciled through the ledger rather
-than typed over a balance. The current `catalog` model — a product with
-free-text key/value attributes, no brand, no classification, no price, no cost,
-and a lifecycle nothing sets — is **not** the final domain architecture, and
-neither is today's generic `Remove → SOLD`, which records that stock left and is
-not a sales design.
+than typed over a balance. The merchandise model, its lifecycle, and safe corrections have since landed;
+today's generic `Remove → SOLD` has not changed, and it records that stock left
+rather than being a sales design.
 
 The milestone that direction is aimed at is **OR1**: safe and useful enough to
 become the store's real day-to-day inventory system while development continues.

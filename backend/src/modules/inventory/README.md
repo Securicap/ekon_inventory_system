@@ -31,8 +31,7 @@ the balance projection, and every rule that protects them.
 - **The receiving workflow** (`receivingService.ts`,
   `domain/receivingRequestHash.ts`) and `POST /api/inventory/receive` — the
   first production caller of the posting engine, and the first thing in the
-  system that puts a row in the ledger. Adjustments, counts, and reversal are
-  the workflows that follow, each in its own PR.
+  system that puts a row in the ledger.
 - **The current stock read** (`service.ts`,
   `infrastructure/balanceRepository.ts`) and `GET /api/inventory/balances` —
   how many units of every active variant are held at every active location,
@@ -51,6 +50,21 @@ the balance projection, and every rule that protects them.
   `GET /api/inventory/movements` — the append-only ledger, paginated, filtered,
   and labelled. Requires `inventory.read`. It adds no table and changes no
   posting behaviour: the ledger was always the evidence, and this reads it.
+- **The adjustment workflow** (`adjustmentService.ts`,
+  `domain/adjustmentRequestHash.ts`) and `POST /api/inventory/adjust` — the
+  recorded quantity was wrong. Posts an `ADJUSTMENT_IN` or an `ADJUSTMENT_OUT`,
+  derived from the sign of the correction, under `inventory.adjust`.
+- **The reversal workflow** (`reversalService.ts`,
+  `domain/reversalRequestHash.ts`) and `POST /api/inventory/reverse` — one
+  movement should never have been posted. Appends a compensating `REVERSAL`
+  whose delta comes from the original row, under `inventory.reverse`. The first
+  thing in the system that reaches back into settled history, and it does so by
+  adding to it.
+- **The stock-presence read** (`stockPresenceService.ts`) — the one question the
+  catalog module may ask this one about balances: does this merchandise hold
+  stock? It exists so archiving can be refused while any remains, without either
+  module querying the other's tables. Read-only, no transaction of its own, and
+  deliberately one method rather than a query API.
 
 ## Stock history
 
@@ -575,45 +589,47 @@ the pre-transaction lookup and the post-claim replay. No workflow queries
 | No session, or one that no longer resolves                                                                  | `401`  | `UNAUTHENTICATED`                        |
 | Signed in without `inventory.receive`                                                                       | `403`  | `FORBIDDEN`                              |
 | Variant or location does not exist                                                                          | `404`  | `NOT_FOUND`                              |
-| Variant not stockable (it or its product is inactive), or location inactive                                 | `409`  | `CONFLICT`                               |
+| Merchandise not `ACTIVE` (effective lifecycle), or location inactive                                        | `409`  | `CONFLICT`                               |
 | Operation id reused for a different command                                                                 | `409`  | `OPERATION_REPLAYED_WITH_DIFFERENT_BODY` |
 | Anything unexpected                                                                                         | `500`  | `INTERNAL`                               |
 
-An **inactive** variant or location is a `409` rather than a `404` because it
-plainly exists: telling somebody holding a delivery that it does not would send
-them looking for a typo instead of for whoever retired the item. Both are
-checked with a focused query — one row, two or three columns — before the
-transaction opens, so an unstockable request never claims an operation id, and
-the id remains free for a corrected request. Foreign keys are the last line of
-defence here, not the business rule: a constraint violation inside the
-transaction would be a `500` that names no field.
+Withdrawn merchandise or an inactive location is a `409` rather than a `404`
+because it plainly exists: telling somebody holding a delivery that it does not
+would send them looking for a typo instead of for whoever withdrew the item.
+Neither refusal claims an operation id — the location is checked before the
+transaction opens, and the merchandise check runs **inside** it, so a refusal
+rolls the claim back with everything else and the id remains free for a
+corrected request. Foreign keys are the last line of defence here, not the
+business rule: a constraint violation inside the transaction would be a `500`
+that names no field.
 
-These two rules apply to **new** commands only. A settled operation is answered
-before they run — see _Settled first, present tense second_ above.
+Both rules apply to **new** commands only. A settled operation is answered
+before either runs — see _Settled first, present tense second_ above.
 
 Variants belong to the **catalog** module, so the check goes through
-`catalogService.findStockableVariant` rather than a query against
+`catalogService.findVariantForReceiving` rather than a query against
 `product_variants`. Locations are this module's own table.
 
-**The variant check honours the parent product too**, because the catalog
-answers this one:
+**Receiving requires effective `ACTIVE`**, and the catalog decides what that
+means:
 
-> A variant is stockable only when both the variant **and its parent product**
-> are active.
+> A variant is never more available than its parent product, so its effective
+> status is the stricter of the two — and receiving is the one operation
+> `DISCONTINUED` refuses.
 
-`findStockableVariant` returns that combined answer as `isActive`, so this
-module keeps one simple test — "may I post against this?" — and never learns a
-`productIsActive` concept or the order in which the two flags are read. The
-current stock read applies the identical rule through
-`listStockableVariants()`, so a variant that has stopped being shown as stock
-has stopped accepting writes at the same moment, which is the whole point of
-letting the catalog own it.
+Each workflow asks the question named after what it is about to do —
+`findVariantForReceiving`, `findVariantForIssue`, `findVariantForCorrection` —
+and each service's dependency is narrowed to its own (`Pick<CatalogService,
+'findVariantForReceiving'>`), so receiving **cannot** reach the issue rule even
+by accident. That matters here more than it reads: the two genuinely differ, and
+a workflow that called the wrong one would either refuse a legitimate sale of
+discontinued stock or accept a delivery of merchandise the shop stopped buying.
 
-No production path deactivates a product or a variant yet — the catalog creates
-and lists, and `catalog.deactivate` has no route or service method — so neither
-state can currently arise through the API. The rule is enforced anyway: the
-workflow that lands deactivation should be able to set a column and stop, and
-the invariant should not be waiting on it to be remembered.
+**The check runs inside the posting transaction, and it locks.** That is what
+makes archive safety real rather than hopeful: the catalog reads the merchandise
+rows `FOR SHARE`, so a lifecycle change cannot commit between the answer and the
+movement it authorized. See INV-19 for the lock protocol and the concurrency
+test that stages both directions of the race.
 
 **Authentication precedes validation.** Enforcement is an `onRequest` hook, so
 an anonymous request with a malformed body is `401` before anything in it is
@@ -863,7 +879,7 @@ the posting engine's own concurrency suite uses, shared in
 | No session, or one that no longer resolves                                                                                  | `401`  | `UNAUTHENTICATED`                        |
 | Signed in without `inventory.remove`                                                                                        | `403`  | `FORBIDDEN`                              |
 | Variant or location does not exist                                                                                          | `404`  | `NOT_FOUND`                              |
-| Variant not stockable (it or its product is inactive), or location inactive                                                 | `409`  | `CONFLICT`                               |
+| Merchandise `ARCHIVED` (effective lifecycle), or location inactive                                                          | `409`  | `CONFLICT`                               |
 | Operation id reused for a different command                                                                                 | `409`  | `OPERATION_REPLAYED_WITH_DIFFERENT_BODY` |
 | The shelf does not hold that much                                                                                           | `422`  | `INSUFFICIENT_STOCK`                     |
 | Anything unexpected                                                                                                         | `500`  | `INTERNAL`                               |
@@ -872,19 +888,287 @@ the posting engine's own concurrency suite uses, shared in
 `INSUFFICIENT_STOCK` and is not special-cased here: the request was well formed
 and understood, and the shelf could not satisfy it.
 
-Entity validation goes through `catalogService.findStockableVariant` and this
-module's own location table, exactly as receiving's does — same questions, same
-statuses, same rules about inactive rows and about authentication preceding
-validation. See _What receiving refuses, and with which status_ above; the only
-difference is the capability and the extra `422`.
+Entity validation goes through this module's own location table and through
+`catalogService.findVariantForIssue` — the same shape receiving uses, and
+deliberately **not the same question**:
+
+> Removal permits `ACTIVE` **and `DISCONTINUED`**, and refuses only `ARCHIVED`.
+
+Discontinuing merchandise is a decision about replenishment, not about the units
+already on the shelf: they are still sold to real customers, and a system that
+refused to record it would not stop the sale — it would only stop knowing about
+it. `ARCHIVED` is refused deliberately rather than left to be implied by the
+fact that archived merchandise has no stock to issue: the lifecycle is enforced
+on its own terms.
+
+Everything else matches receiving — statuses, the `409`-not-`404` rule for
+merchandise that plainly exists, the in-transaction lock, and authentication
+preceding validation. See _What receiving refuses, and with which status_ above;
+the differences are the capability, the wider lifecycle rule, and the extra
+`422`.
 
 **Removing the last unit is a success.** `quantityAfter: 0` is an answer: the
 shelf is empty, not the request refused.
 
+## Adjustments
+
+`POST /api/inventory/adjust` records that **the recorded quantity was wrong**.
+Nothing physical happened: no delivery arrived, no customer bought anything, and
+no unit moved. The number was wrong, and this corrects it.
+
+### An adjustment is not a removal, and not a receipt
+
+An `ISSUE` says stock genuinely left through ordinary operations. A `RECEIPT`
+says stock genuinely arrived. An `ADJUSTMENT_OUT` says the balance was too high
+and somebody corrected it downward — the stock had already gone, or had never
+been there at all.
+
+They look identical in a balance and mean opposite things in a history: one is
+trade, the other is a recording error. This ledger is append-only, so a movement
+written under the wrong one of them is wrong forever, and no compensating
+movement can un-say what the row claimed. That is why they are different
+movement types under **different capabilities**, and why `inventory.adjust` is
+deliberately not granted alongside `inventory.remove` in the default seed:
+recording that stock left is what somebody at the counter does all day, and
+making a shortfall disappear is authority over the records themselves.
+
+### An adjustment is not a reversal either
+
+When the wrong movement is known, **reverse it** — the correction is linked to
+the mistake, the quantity is derived from the row, and neither can be reversed
+twice. An adjustment is what is left when there is no single movement to point
+at: a receipt nobody entered, a quantity mistyped weeks ago and discovered now,
+units found on a shelf with no history behind them.
+
+### And it is not a physical count
+
+A count observes reality; reconciliation changes the system through a
+`COUNT_RECONCILIATION` that records what was expected and what was seen (INV-9).
+Adjusting a balance to agree with a count would destroy the variance, which is
+the only signal the shop had that something is wrong. Counts are PR 6 and
+nothing here anticipates them.
+
+### `POST /api/inventory/adjust`
+
+Requires **`inventory.adjust`**. `201`, and `201` again on a retry.
+
+```jsonc
+// request
+{
+  "operationId": "0198f0a0-…", // generated when the form opens, reused on retry
+  "variantId": "0198f0a0-…",
+  "locationId": "0198f0a0-…",
+  "quantityDelta": -2,            // signed; the server derives the movement type
+  "reason": "DATA_ENTRY_ERROR",
+  "note": "Delivery of 12 entered as 21", // optional; required for OTHER
+  "occurredAt": "2026-08-03T10:15:00.000Z"
+}
+
+// 201 Created
+{
+  "operationId": "0198f0a0-…",
+  "movementId": "0198f0a0-…",
+  "quantityAfter": 8
+}
+```
+
+**The delta carries a sign, and this is the only workflow whose quantity does.**
+Receiving always adds and removal always subtracts, so each states a positive
+number and derives its own direction; an adjustment can go either way, and the
+direction is the caller's statement about which way the record was wrong.
+Splitting it into two endpoints would put the same decision in a URL; splitting
+it into a positive quantity plus a direction word would give one command two
+spellings — one too many for a hash that has to recognize a retry.
+
+**The client never names the movement type.** `ADJUSTMENT_IN` or
+`ADJUSTMENT_OUT` follows from the sign, in `adjustmentTypeFor`, and the posting
+engine independently refuses a type whose sign disagrees with its delta. A
+client that could send both could post an increase that removed stock.
+
+### The reasons
+
+`DATA_ENTRY_ERROR`, `MISSED_MOVEMENT`, `OTHER` — and they describe **the
+record**, not the stock. That is the whole difference from `REMOVAL_REASONS`:
+
+- `DATA_ENTRY_ERROR` — the quantity recorded is not the quantity meant. A
+  delivery of 12 entered as 21, or the same receipt entered twice.
+- `MISSED_MOVEMENT` — stock genuinely moved and was never recorded at all. A
+  delivery booked in on paper, a sale rung up while the system was unreachable,
+  merchandise found on a shelf that nobody entered.
+- `OTHER` — anything else, and it **requires a note**. The alternative is
+  somebody choosing a wrong reason from a list with no right one, and a wrong
+  reason in a permanent ledger is worse than an unspecific one with a sentence
+  beside it.
+
+`SOLD` is not here and never will be: stock that was sold left the shelf and is
+_removed_; a sale nobody recorded is a `MISSED_MOVEMENT`. Neither are
+`SHRINKAGE`, `THEFT`, or `MISCOUNT` — those are conclusions about a variance,
+and a variance is what a physical count produces. Offering them would invite
+adjusting a balance to whatever was last counted and recording a guess about
+why, which is precisely the flattening that stops a shop noticing it is being
+stolen from.
+
+### What an adjustment shares with every other workflow
+
+The operation claim, the balance lock, the chain pointer, the stock floor, the
+replay, and the atomic projection update — all of it is the posting engine's,
+unchanged. An adjustment can no more take stock below zero than anything else
+can: a correction of −4 against a shelf holding 3 is `INSUFFICIENT_STOCK`
+(`422`), nothing is clamped, and nothing partial is applied.
+
+The canonical request hash covers eight business fields —
+`workflow, variantId, locationId, quantityDelta, reason, note, occurredAt,
+actorId`. The **note is in it**, unlike in any other workflow, because it is the
+only workflow that has one and it is a business field: an adjustment whose note
+changed from "counted wrong" to "delivery never entered" is a different account
+of what happened, and one operation id across the two is a `409`.
+
+---
+
+## Reversal
+
+`POST /api/inventory/reverse` undoes one movement by **appending its
+compensation**.
+
+```text
+wrong movement
+    ↓
+REVERSAL of it
+    ↓
+optional fresh correct movement
+```
+
+### Nothing is edited and nothing is deleted
+
+The original row keeps its id, its type, its quantities, its reason, its actor,
+and its place in the chain. A new `REVERSAL` beside it names it through
+`reverses_movement_id`. Anyone reading the ledger afterwards sees both the
+mistake and the remedy, which is the entire difference between a corrected
+record and an altered one (INV-1, INV-2). The database would refuse an `UPDATE`
+or a `DELETE` on this table in any case, and `scripts/check-conventions.mjs`
+fails the build on either appearing in source.
+
+### The original movement is the authority
+
+The variant, the location, the quantity, and the direction are read off the
+original row **inside the posting transaction**. The request schema refuses all
+four, plus `movementType` and `reversesMovementId`, because each is derivable
+and a second statement of a derived value can only ever disagree with the first.
+A client that could state the quantity could "reverse" a receipt of 10 by 3 and
+leave the ledger claiming a correction it never made.
+
+### `POST /api/inventory/reverse`
+
+Requires **`inventory.reverse`**, which is deliberately **not**
+`inventory.adjust`. They are separate powers: an adjustment states a new number,
+a reversal reaches back into settled history and takes one of its movements out
+of the balance. A shop may well want the first without the second.
+
+```jsonc
+// request
+{
+  "operationId": "0198f0a0-…",
+  "movementId": "0198f0a0-…", // the movement that was wrong
+  "note": "Delivery entered twice", // optional
+  "occurredAt": "2026-08-03T10:15:00.000Z" // when the correction was made
+}
+
+// 201 Created — the same three fields every command answers with
+{
+  "operationId": "0198f0a0-…",
+  "movementId": "0198f0a0-…", // the REVERSAL's id, not the original's
+  "quantityAfter": 0
+}
+```
+
+`occurredAt` is the **correction's** business time, not the original movement's.
+The mistake happened when it happened; this is when somebody put it right.
+
+There is no `reason`: a reversal carries its reason in the movement it reverses,
+which is what makes it a reversal rather than a fresh movement in the opposite
+direction. The ledger requires a reason code for issues and adjustments only
+(INV-11).
+
+### The transaction, step by step
+
+`postReversal` in `ledgerService.ts`, and the order is the design:
+
+1. **claim the operation** — a retry is answered here and posts nothing;
+2. **read the original** — it must exist (`404`), and must not itself be a
+   `REVERSAL` (`409`);
+3. **run the workflow's lifecycle precondition**, now that the variant is known;
+4. **lock the balance**, which serializes this against every other writer on the
+   same (variant, location) chain;
+5. **only then** ask whether the original has already been reversed — after the
+   lock, so a reversal committed by the writer this one queued behind is
+   visible. Asking before the lock would read a stale snapshot and two reversals
+   would both believe they were the first;
+6. derive `-original.quantityDelta`, check the stock floor, append the
+   `REVERSAL`, move the projection, complete the operation.
+
+Step 5 is not the guarantee. **`UNIQUE (reverses_movement_id)` is**, and it holds
+even against a caller that never took the lock — a lost race surfaces as that
+constraint and is translated into the same `409` the check would have given,
+never a `500` and never a second movement that removed the stock twice.
+
+Since 0012 the database also refuses a reversal of a reversal and a reversal
+naming a movement on another chain, both as foreign keys. See INV-2.
+
+### Reversal works against the current balance
+
+```text
+Receipt  +10  → balance 10
+Issue     −3  → balance  7
+Reverse the receipt (−10) → would leave −3
+```
+
+That reversal is **refused** with `INSUFFICIENT_STOCK` (`422`). Stock never goes
+below zero, for any role, by any path (INV-8), and the existence of a historical
+receipt is not permission to break the floor. The remedy is stated rather than
+implied: correct the later movements first — reverse the issue, then the receipt
+— which is more history, not less. Nothing is clamped and nothing is partially
+reversed.
+
+### Lifecycle and corrections
+
+A correction concerns **ledger truth**, not replenishment policy, so it does not
+reuse the receiving or the removal rule:
+
+- `DISCONTINUED` merchandise can always be corrected. Discontinuing something on
+  Friday must not make Thursday's mis-keyed receipt permanent.
+- `ARCHIVED` merchandise cannot. A correction would put units back on a shelf
+  the archive asserts is empty, behind a status that has removed the item from
+  every operational screen.
+
+The remedy is explicit: **restore it to `DISCONTINUED`, correct the ledger,
+archive it again.** No workflow in this system changes a lifecycle to get its own
+write through — a status change that quietly happened as a side effect of a
+correction would be the least inspectable thing here.
+
+### In history
+
+A reversal appears in `GET /api/inventory/movements` like any other movement,
+and filtering by `movementType=REVERSAL` works through the existing contract
+with no special case. Two fields carry the relationship:
+
+- `reversesMovementId` — on the reversal, pointing at what it undid;
+- `reversedByMovementId` — on the original, pointing at the reversal.
+
+The second is **derived, not stored**: the ledger keeps one pointer, and the
+history query reads it back through the unique index with a single `LEFT JOIN`.
+It is not an N+1 and cannot become one — `UNIQUE (reverses_movement_id)` means
+the join matches at most one row per movement, so it can neither multiply a page
+nor need a `DISTINCT`. It is there because a corrected receipt that did not say
+so would read as stock the shop still received, and somebody would go looking
+for where it went.
+
+---
+
 ## Current stock
 
 `GET /api/inventory/balances` answers the question the counter asks all day:
-**how many units of every active variant are held at every active location.**
+**how many units of every operational variant are held at every active
+location.**
 
 It is an **operational current-state view**, not a report and not history. There
 is no date range, no valuation, no movement list, and no export. The ledger
@@ -973,23 +1257,33 @@ one — a fabricated `updated_at` would claim a moment at which nothing happened
 A product's, variant's, or location's own `updated_at` is not a substitute
 either: it answers a different question.
 
-### Active only, and history is untouched
+### Operational merchandise only, and history is untouched
 
-Only **active products, active variants, and active locations** appear. An
-active variant under a retired product does not: the product has been withdrawn,
-and presenting it on a stock screen would offer something the business no longer
-sells.
+Merchandise appears while its **effective lifecycle** — the stricter of the
+variant's own status and its product's — is `ACTIVE` or `DISCONTINUED`, at every
+active location.
+
+**`DISCONTINUED` merchandise is here, and that is the point.** The shop stopped
+reordering it; the units on the shelf are still real, still sold, and still the
+business's property. A stock screen that dropped them would strand inventory —
+and stranded stock leaves the shelf anyway, with the ledger the only thing that
+does not know. `ARCHIVED` merchandise is absent, which is honest only because
+archiving is refused while any stock remains (INV-19): there is nothing left to
+hide.
+
+Which statuses those are is the **catalog's** rule, asked for through
+`listOperationalVariants()` and never restated here.
 
 This filters a present-tense operational view. **It changes and deletes
-nothing** — every movement and every balance row of a retired item stays exactly
-as it was, and stock sitting at a closed location is still on that shelf in the
-database. It is simply not part of what the shop is asked to act on today, and
-therefore not part of the totals.
+nothing** — every movement and every balance row of archived merchandise stays
+exactly as it was, and stock sitting at a closed location is still on that shelf
+in the database. It is simply not part of what the shop is asked to act on
+today, and therefore not part of the totals.
 
 Two empty states, both `200`:
 
-- **no active variants** — `[]`, whatever locations exist;
-- **no active locations** — every active variant, with `locations: []` and
+- **no operational variants** — `[]`, whatever locations exist;
+- **no active locations** — every operational variant, with `locations: []` and
   `totalQuantity: 0`. Nowhere to put stock is an operational problem for a
   screen to surface, not a server error.
 
@@ -1095,14 +1389,20 @@ visible at all.
 
 ## Deferred (future PRs)
 
-Adjustments, physical counts, and public reversal. Reversal posting itself.
-Transfers, multi-location stock behaviour, and location management (create /
-rename / deactivate). Offline sync remains deferred too.
+Physical counts and their reconciliation — PR 6. Transfers, multi-location stock
+behaviour, and location management (create / rename / deactivate). Offline sync
+remains deferred too.
 
-**Stock adjustment is not implemented**, and removal is not it. `ISSUE` records
-stock that left; `ADJUSTMENT_OUT` records a balance that was wrong. The second
-has no route, no service, and no workflow — `inventory.adjust` still opens
-nothing.
+Every screen for what this PR added is **PR 7**: there is no adjustment form, no
+reversal button, and no history view. The API is complete and the interface is
+not, deliberately and in that order.
+
+Deferred with adjustments specifically: bulk or multi-line adjustments, an
+approval workflow above them, configurable or per-shop reason administration,
+and any aggregation of corrections into a report. Deferred with reversal:
+reversing a whole operation rather than a movement, partial reversal (which is
+an adjustment, and saying otherwise would let a client choose a reversal's
+quantity), and any automatic re-posting of a corrected command.
 
 The **removal screen** now calls this endpoint — see
 [frontend/README.md](../../../../frontend/README.md). It drives its choices from
@@ -1142,16 +1442,21 @@ attachments, lot numbers, expiry dates, serial numbers, barcode scanning, and
 CSV import. None of them is a stock movement, and none of them is needed to
 record that stock arrived.
 
-One rule the schema leaves to the reversal workflow because it needs a lookup
-rather than a row-local check: a `REVERSAL` must belong to the same chain as the
-movement it reverses.
+Both rules 0005 left to the reversal workflow are now **database constraints**
+(0012): a `REVERSAL` must belong to the same chain as the movement it reverses,
+and a `REVERSAL` may not itself be reversed. See INV-2.
 
 ## Invariants that remain the module's own
 
 - **This is the only module permitted to INSERT into `inventory_movements`.**
   That is the boundary the whole system rests on, and it is enforced by review
   and by `scripts/check-conventions.mjs`, not by the schema. In practice it now
-  means: through `postMovement`, and nowhere else.
+  means: through `postMovement` or `postReversal`, and nowhere else.
+- **Merchandise lifecycle is not this module's to decide.** Receiving, removal,
+  adjustment, and reversal each ask the catalog the question named after what
+  they are about to do, and none of them interprets a status. Nothing here
+  changes one, either: a workflow that adjusted a lifecycle to get its own write
+  through would be the least inspectable thing in the system.
 - Physical counts produce reconciliation movements and never overwrite a
   quantity (INV-9). The engine can post a `COUNT_RECONCILIATION` in either
   direction; the count workflow that decides the delta is deferred.

@@ -66,6 +66,35 @@ export const quantityDeltaSchema = z
  */
 export const MAX_MOVEMENT_QUANTITY = 2_147_483_647;
 
+/**
+ * The longest note any movement may carry.
+ *
+ * `inventory_movements.note` is bounded at 500 characters by a CHECK (0005), so
+ * this is the database's own ceiling rather than a business policy. Stated here
+ * so a note that could never be stored is refused as a `400` instead of failing
+ * inside a transaction as a `500`.
+ */
+export const MAX_MOVEMENT_NOTE_LENGTH = 500;
+
+/**
+ * Free text somebody types at the counter, for the workflows that offer one.
+ *
+ * Trimmed and bounded, and **never blank**: a note consisting of spaces is an
+ * empty note wearing a value's clothes, and storing one would make
+ * "somebody explained this" indistinguishable from "nobody did". A workflow
+ * that has no note field does not invent one — receiving and removal each
+ * deliberately carry no note at all.
+ *
+ * It is not a reason. A reason is a code from a closed vocabulary that a report
+ * can count; a note is the sentence a person wrote beside it, which nothing
+ * counts and nothing parses.
+ */
+export const noteSchema = z
+  .string()
+  .trim()
+  .min(1, 'A note must not be blank')
+  .max(MAX_MOVEMENT_NOTE_LENGTH);
+
 /** UUIDv7, generated at the point of capture. */
 export const idSchema = z.string().uuid();
 

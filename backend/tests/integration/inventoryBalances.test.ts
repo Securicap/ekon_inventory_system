@@ -59,25 +59,27 @@ interface ProductOptions {
   name?: string;
   sku?: string;
   attributes?: Record<string, string>;
-  productActive?: boolean;
-  variantActive?: boolean;
+  productLifecycle?: 'ACTIVE' | 'DISCONTINUED' | 'ARCHIVED';
+  variantLifecycle?: 'ACTIVE' | 'DISCONTINUED' | 'ARCHIVED';
 }
 
 /**
  * A product with one variant, written straight to the catalog tables.
  *
- * Direct SQL rather than `POST /api/catalog/products` because these tests need
- * states no production path can currently produce: a retired product, a retired
- * variant. Nothing in `src/` can deactivate either yet, and the read has to be
- * correct on the day that lands. One test below does go through the real catalog
- * endpoint, to prove the composition works on rows the catalog itself wrote.
+ * Direct SQL rather than `POST /api/catalog/products` because these tests set a
+ * lifecycle at creation time, which the create endpoint deliberately refuses —
+ * new merchandise always begins `ACTIVE`. Reaching the archived states through
+ * the lifecycle API as well would make every fixture depend on that workflow's
+ * own rules, including the zero-stock check, which is not what this suite is
+ * about. One test below does go through the real catalog endpoint, to prove the
+ * composition works on rows the catalog itself wrote.
  */
 async function newProduct(db: TestDatabase, options: ProductOptions = {}): Promise<Variant> {
   const productId = newId();
   await db.pool.query(
-    `INSERT INTO products (id, name, is_active, created_at, updated_at)
+    `INSERT INTO products (id, name, lifecycle_status, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $4)`,
-    [productId, options.name ?? 'Stock fixture', options.productActive ?? true, RECORDED_AT],
+    [productId, options.name ?? 'Stock fixture', options.productLifecycle ?? 'ACTIVE', RECORDED_AT],
   );
 
   const variant = await newVariantOf(db, productId, options);
@@ -88,7 +90,7 @@ async function newProduct(db: TestDatabase, options: ProductOptions = {}): Promi
 async function newVariantOf(
   db: TestDatabase,
   productId: string,
-  options: Pick<ProductOptions, 'sku' | 'attributes' | 'variantActive'> = {},
+  options: Pick<ProductOptions, 'sku' | 'attributes' | 'variantLifecycle'> = {},
 ): Promise<{ productId: string; variantId: string; sku: string }> {
   const variantId = newId();
   const sku = options.sku ?? nextSku();
@@ -96,9 +98,9 @@ async function newVariantOf(
 
   await db.pool.query(
     `INSERT INTO product_variants
-       (id, product_id, sku, variant_signature, is_active, created_at, updated_at)
+       (id, product_id, sku, variant_signature, lifecycle_status, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $6)`,
-    [variantId, productId, sku, sku, options.variantActive ?? true, RECORDED_AT],
+    [variantId, productId, sku, sku, options.variantLifecycle ?? 'ACTIVE', RECORDED_AT],
   );
 
   for (const [name, value] of attributes) {
@@ -427,15 +429,59 @@ describe('current stock', () => {
     });
   });
 
+  describe('what an operational view keeps', () => {
+    it('keeps discontinued merchandise, with its stock, at both levels', async () => {
+      // The one thing lifecycle must not do. Discontinuing is a decision about
+      // replenishment: the shop stopped buying it, and the units on the shelf
+      // are still real, still sold, and still the business's property. A stock
+      // screen that dropped them would strand inventory, and stranded stock
+      // leaves the shelf anyway — with the ledger the only thing not knowing.
+      // Stock arrives while the merchandise is still bought, and is
+      // discontinued afterwards — which is the order it happens in a shop, and
+      // the only order receiving permits.
+      const variant = await newProduct(db, { name: 'Discontinued Variant Product' });
+      await receive(variant.variantId, mainStoreId, 5);
+      await db.pool.query(
+        `UPDATE product_variants SET lifecycle_status = 'DISCONTINUED' WHERE id = $1`,
+        [variant.variantId],
+      );
+
+      const product = await newProduct(db, { name: 'Discontinued Product' });
+      await receive(product.variantId, mainStoreId, 3);
+      await db.pool.query(`UPDATE products SET lifecycle_status = 'DISCONTINUED' WHERE id = $1`, [
+        product.productId,
+      ]);
+
+      expect(await stockFor(variant.variantId)).toMatchObject({ totalQuantity: 5 });
+      expect(await stockFor(product.variantId)).toMatchObject({ totalQuantity: 3 });
+    });
+
+    it('keeps a discontinued variant that has been drawn down to zero', async () => {
+      // Zero is not a lifecycle change and a lifecycle change is not zero. The
+      // shelf is empty and the merchandise is still listed, because somebody has
+      // to be able to see that it is empty.
+      const variant = await newProduct(db, {
+        name: 'Empty Discontinued',
+        variantLifecycle: 'DISCONTINUED',
+      });
+
+      expect(await stockFor(variant.variantId)).toMatchObject({ totalQuantity: 0 });
+    });
+  });
+
   describe('what an operational view leaves out', () => {
-    it('omits a retired variant, and keeps its ledger history', async () => {
-      const variant = await newProduct(db, { name: 'Retired Variant Product' });
+    it('omits an archived variant, and keeps its ledger history', async () => {
+      const variant = await newProduct(db, { name: 'Archived Variant Product' });
       await receive(variant.variantId, mainStoreId, 6);
       expect(await stockFor(variant.variantId)).toBeDefined();
 
-      await db.pool.query(`UPDATE product_variants SET is_active = false WHERE id = $1`, [
-        variant.variantId,
-      ]);
+      // Written straight to the column: archiving through the API would be
+      // refused while these six units are on the shelf, and the point of this
+      // test is that the *read* excludes archived merchandise even so.
+      await db.pool.query(
+        `UPDATE product_variants SET lifecycle_status = 'ARCHIVED' WHERE id = $1`,
+        [variant.variantId],
+      );
 
       expect(await stockFor(variant.variantId)).toBeUndefined();
 
@@ -453,14 +499,14 @@ describe('current stock', () => {
       expect(balances[0]?.quantity_on_hand).toBe(6);
     });
 
-    it('omits every variant of a retired product, active or not', async () => {
-      // A variant nobody deactivated, under a product that was withdrawn, is
-      // not something the business sells today.
-      const product = await newProduct(db, { name: 'Withdrawn Product' });
+    it('omits every variant of an archived product, whatever the variant says', async () => {
+      // An ACTIVE variant under an ARCHIVED product is effectively archived: a
+      // variant is never more available than the merchandise it belongs to.
+      const product = await newProduct(db, { name: 'Archived Product' });
       const second = await newVariantOf(db, product.productId, {});
       await receive(product.variantId, mainStoreId, 4);
 
-      await db.pool.query(`UPDATE products SET is_active = false WHERE id = $1`, [
+      await db.pool.query(`UPDATE products SET lifecycle_status = 'ARCHIVED' WHERE id = $1`, [
         product.productId,
       ]);
 
@@ -745,9 +791,9 @@ describe('a business with nothing in its catalog', () => {
     expect(listInventoryBalancesResponseSchema.parse(response.json())).toEqual([]);
   });
 
-  it('answers an empty array when every product has been retired', async () => {
-    await newProduct(db, { name: 'Discontinued', productActive: false });
-    await newProduct(db, { name: 'Also Discontinued', variantActive: false });
+  it('answers an empty array when every product has been archived', async () => {
+    await newProduct(db, { name: 'Archived Product', productLifecycle: 'ARCHIVED' });
+    await newProduct(db, { name: 'Archived Variant', variantLifecycle: 'ARCHIVED' });
 
     const response = await app.inject({ method: 'GET', url: BALANCES, cookies: owner.cookies });
     expect(listInventoryBalancesResponseSchema.parse(response.json())).toEqual([]);

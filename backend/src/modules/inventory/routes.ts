@@ -1,18 +1,23 @@
 import type { FastifyInstance } from 'fastify';
 import {
+  adjustStockRequestSchema,
   movementHistoryQuerySchema,
   receiveStockRequestSchema,
   removeStockRequestSchema,
+  reverseMovementRequestSchema,
 } from '@ekon/shared';
 import { requireActor } from '../identity/index.js';
+import type { AdjustmentService } from './adjustmentService.js';
 import type { MovementHistoryService } from './movementHistoryService.js';
 import type { ReceivingService } from './receivingService.js';
 import type { RemovalService } from './removalService.js';
+import type { ReversalService } from './reversalService.js';
 import type { InventoryService } from './service.js';
 
 /**
  * Inventory HTTP surface: reading locations, reading current stock, booking in
- * stock that arrived, and recording stock that left.
+ * stock that arrived, recording stock that left, correcting a quantity that was
+ * wrong, and reversing a movement that should never have been posted.
  *
  * Each route declares the capability it needs, and the identity module's
  * enforcement hook resolves the session and checks that capability before the
@@ -27,14 +32,21 @@ import type { InventoryService } from './service.js';
  * posting engine. A handler that called `postMovement` itself would be a third
  * place where "what a receipt is" gets decided.
  *
- * Receiving and removal are **separate endpoints under separate capabilities**,
- * not one movement endpoint with a direction. Booking in a delivery and taking
+ * Receiving, removal, adjustment, and reversal are **four endpoints under four
+ * capabilities**, not one movement endpoint with a direction and a type. Booking in a delivery and taking
  * a bottle off the shelf are different business acts that different people are
  * trusted with, and a generic `POST /api/inventory/movements` would make the
  * difference a field in a body rather than a door somebody was given a key to.
  * That objection is about *writing*: `GET /api/inventory/movements` reads the
- * one ledger both of those workflows append to, and reading it is a single act
- * under a single capability.
+ * one ledger all four of those workflows append to, and reading it is a single
+ * act under a single capability.
+ *
+ * The four write endpoints are not variations of each other. Booking in a
+ * delivery, taking a bottle off the shelf, saying the recorded number was
+ * wrong, and undoing a movement that should never have been posted are
+ * different business acts that different people are trusted with, and a generic
+ * `POST /api/inventory/movements` would make the difference a field in a body
+ * rather than a door somebody was given a key to.
  */
 export function registerInventoryRoutes(
   app: FastifyInstance,
@@ -43,6 +55,8 @@ export function registerInventoryRoutes(
     history: MovementHistoryService;
     receiving: ReceivingService;
     removal: RemovalService;
+    adjustment: AdjustmentService;
+    reversal: ReversalService;
   },
 ): void {
   app.get(
@@ -128,6 +142,72 @@ export function registerInventoryRoutes(
       const actor = requireActor(request);
       const input = removeStockRequestSchema.parse(request.body);
       const result = await services.removal.removeStock({ request: input, actorId: actor.id });
+      return reply.status(201).send(result);
+    },
+  );
+
+  /**
+   * Records that a quantity was **wrong**: one variant, at one location, by one
+   * signed correction, for one reason, at one business time.
+   *
+   * Requires **`inventory.adjust`**, which is not `inventory.remove` and is
+   * deliberately withheld from employees by the default seed. Recording that
+   * stock left says what happened; adjusting says the record was wrong, and the
+   * second can make a shortfall disappear — so it is the one that has to be
+   * given on purpose. The two capabilities are never merged, and neither route
+   * accepts the other's.
+   *
+   * The body carries a **signed** `quantityDelta` and no movement type. The
+   * server derives `ADJUSTMENT_IN` or `ADJUSTMENT_OUT` from the sign, so the
+   * two can never disagree.
+   *
+   * `201`, and `201` again on a retry — the same rule receiving and removal
+   * follow. A shortfall comes back as `INSUFFICIENT_STOCK` (`422`) from the
+   * posting engine: an adjustment can no more take stock below zero than
+   * anything else can, and nothing is clamped.
+   */
+  app.post(
+    '/api/inventory/adjust',
+    { config: { capability: 'inventory.adjust' } },
+    async (request, reply) => {
+      const actor = requireActor(request);
+      const input = adjustStockRequestSchema.parse(request.body);
+      const result = await services.adjustment.adjustStock({ request: input, actorId: actor.id });
+      return reply.status(201).send(result);
+    },
+  );
+
+  /**
+   * Undoes one movement by appending its compensation: `POST` a movement id,
+   * get a `REVERSAL` of it.
+   *
+   * Requires **`inventory.reverse`**, and is deliberately not authorized
+   * through `inventory.adjust`. They are separate capabilities because they are
+   * separate powers: an adjustment states a new number, a reversal reaches back
+   * into settled history and takes one of its movements back out of the
+   * balance. A shop may well want the first without the second.
+   *
+   * The body names the movement and nothing else about the stock. The variant,
+   * the location, the quantity, and the direction are read from the original
+   * row inside the transaction, so there is nothing here for a caller to state
+   * wrongly.
+   *
+   * `201`: the command created a movement — a new one, beside the original,
+   * which is untouched. A retry is answered with that same reversal rather than
+   * a second one. `404` for a movement that does not exist, `409` for a
+   * movement that is itself a reversal or has already been reversed, and `422`
+   * (`INSUFFICIENT_STOCK`) when reversing would take the shelf below zero.
+   */
+  app.post(
+    '/api/inventory/reverse',
+    { config: { capability: 'inventory.reverse' } },
+    async (request, reply) => {
+      const actor = requireActor(request);
+      const input = reverseMovementRequestSchema.parse(request.body);
+      const result = await services.reversal.reverseMovement({
+        request: input,
+        actorId: actor.id,
+      });
       return reply.status(201).send(result);
     },
   );

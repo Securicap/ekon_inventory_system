@@ -82,13 +82,13 @@ describe('loading the choices', () => {
           id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a03',
           name: 'Pwodwi retire',
           sku: 'EKN-RETIRED1',
-          isActive: false,
+          lifecycleStatus: 'DISCONTINUED',
         }),
         productFixture({
           id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a04',
           name: 'Varyant fèmen',
           sku: 'EKN-CLOSED01',
-          variantIsActive: false,
+          variantLifecycleStatus: 'ARCHIVED',
         }),
       ]),
     });
@@ -154,7 +154,7 @@ describe('loading the choices', () => {
 
   it('says so, and refuses to submit, when nothing can be received', async () => {
     await openReceiving({
-      'GET /api/catalog/products': json([productFixture({ isActive: false })]),
+      'GET /api/catalog/products': json([productFixture({ lifecycleStatus: 'DISCONTINUED' })]),
     });
 
     expect(await screen.findByText(ht['receiving.noVariants'])).toBeInTheDocument();
