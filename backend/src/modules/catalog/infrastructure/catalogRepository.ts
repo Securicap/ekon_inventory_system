@@ -122,6 +122,36 @@ export interface StockableVariantListing {
   attributes: VariantAttribute[];
 }
 
+/**
+ * A variant as **history** needs to name it, which is not the same question as
+ * what may be stocked.
+ *
+ * `StockableVariantListing` answers "what can we hold stock of today" and
+ * therefore filters to active merchandise under active products. Evidence has
+ * no business being filtered that way: a movement posted last year against a
+ * variant the shop has since retired is exactly the record somebody goes
+ * looking for, and a history that quietly omitted it would be worse than one
+ * that refused to load.
+ *
+ * So this resolves any variant id, whatever its lifecycle or its `is_active`,
+ * and returns neither flag — a reader is being told what the merchandise *is*,
+ * not whether it may be received into today.
+ *
+ * Deliberately narrow: identity, the product it belongs to, the brand, the SKU,
+ * and the attributes that tell two variants apart. No price, no reference cost,
+ * no classification, no barcode. None of them is evidence about a stock
+ * movement, and each would widen what the inventory module depends on.
+ */
+export interface VariantLabel {
+  id: string;
+  productId: string;
+  productName: string;
+  /** `null` for merchandise nobody has given a brand. Never guessed from a name. */
+  brandName: string | null;
+  sku: string;
+  attributes: VariantAttribute[];
+}
+
 export interface InsertProductParams {
   id: string;
   name: string;
@@ -629,6 +659,58 @@ export async function listStockableVariants(db: Queryable): Promise<StockableVar
     id: row.id,
     productId: row.product_id,
     productName: row.product_name,
+    sku: row.sku,
+    attributes: attributesByVariant.get(row.id) ?? [],
+  }));
+}
+
+/**
+ * Labels for a known set of variant ids, in bulk and regardless of
+ * stockability. See {@link VariantLabel} for why the filter that
+ * `listStockableVariants` applies would be wrong here.
+ *
+ * Two statements for any number of ids — the variants joined to their products
+ * and brands, then their attributes — so a page of history costs the same as
+ * one movement. An id with no variant is simply absent from the result rather
+ * than an error: the caller is resolving labels for permanent ledger ids and
+ * decides for itself what a missing one means.
+ */
+export async function findVariantLabels(
+  db: Queryable,
+  variantIds: string[],
+): Promise<VariantLabel[]> {
+  if (variantIds.length === 0) return [];
+
+  const { rows: variantRows } = await db.query<{
+    id: string;
+    product_id: string;
+    sku: string;
+    product_name: string;
+    brand_name: string | null;
+  }>(
+    `SELECT v.id, v.product_id, v.sku, p.name AS product_name, b.name AS brand_name
+       FROM product_variants v
+       JOIN products p ON p.id = v.product_id
+       LEFT JOIN brands b ON b.id = p.brand_id
+      WHERE v.id = ANY($1)
+      ORDER BY p.name, v.sku, v.id`,
+    [variantIds],
+  );
+
+  if (variantRows.length === 0) return [];
+
+  const attributesByVariant = groupAttributes(
+    await loadAttributes(
+      db,
+      variantRows.map((row) => row.id),
+    ),
+  );
+
+  return variantRows.map((row) => ({
+    id: row.id,
+    productId: row.product_id,
+    productName: row.product_name,
+    brandName: row.brand_name,
     sku: row.sku,
     attributes: attributesByVariant.get(row.id) ?? [],
   }));

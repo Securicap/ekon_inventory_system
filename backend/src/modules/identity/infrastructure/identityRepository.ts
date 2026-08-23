@@ -319,6 +319,39 @@ export async function findSessionPrincipal(
  * somebody removed the grants — in which case the person signs in and can do
  * nothing, which is the safe direction for that mistake to fail in.
  */
+/**
+ * The display names of a known set of user ids, in bulk.
+ *
+ * One statement for any number of ids, so a caller labelling a page of records
+ * pays for one query rather than one per row.
+ *
+ * **An id that resolves to nothing is simply absent from the result**, and that
+ * is the point rather than an oversight. `inventory_movements.user_id` carries
+ * no foreign key onto this table (INV-11) — movements existed before the
+ * identity module did, and some carry actor uuids that were never accounts. A
+ * caller holding such an id needs to be told "no name", not handed an error and
+ * not handed an invented one.
+ *
+ * Deactivated users resolve normally. Their name has to stay readable on every
+ * movement they posted, which is exactly what INV-16 deactivates rather than
+ * deletes them for.
+ *
+ * Returns the display name only. Nothing about a person's role, their status,
+ * or their credential belongs in a label another module reads.
+ */
+export async function findUserDisplayNames(
+  db: Queryable,
+  userIds: string[],
+): Promise<{ id: string; displayName: string }[]> {
+  if (userIds.length === 0) return [];
+
+  const { rows } = await db.query<{ id: string; display_name: string }>(
+    `SELECT id, display_name FROM users WHERE id = ANY($1)`,
+    [userIds],
+  );
+  return rows.map((row) => ({ id: row.id, displayName: row.display_name }));
+}
+
 export async function findRoleCapabilities(db: Queryable, role: Role): Promise<Capability[]> {
   const { rows } = await db.query<{ capability: Capability }>(
     `SELECT capability

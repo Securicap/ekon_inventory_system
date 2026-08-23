@@ -75,6 +75,42 @@ export async function listActiveLocations(db: Queryable): Promise<ActiveLocation
 }
 
 /**
+ * A location as **history** needs to name it: the id it was recorded against,
+ * and what that place is called.
+ *
+ * Deliberately not filtered to active locations, unlike `listActiveLocations`.
+ * A shelf that has been closed still has a history, and a movement posted there
+ * last year must stay readable — filtering it out would make the record
+ * unlabelled rather than making the shelf any more closed.
+ */
+export interface LocationLabel {
+  id: string;
+  name: string;
+}
+
+/**
+ * Labels for a known set of location ids, in bulk. One statement for any number
+ * of ids, so a page of history costs the same as a single movement.
+ *
+ * An id that resolves to nothing is absent from the result rather than an
+ * error — the caller holds permanent ledger ids and decides what a missing one
+ * means. It cannot happen today: `inventory_movements.location_id` references
+ * this table with `ON DELETE RESTRICT`.
+ */
+export async function findLocationLabels(
+  db: Queryable,
+  locationIds: string[],
+): Promise<LocationLabel[]> {
+  if (locationIds.length === 0) return [];
+
+  const { rows } = await db.query<Pick<LocationRow, 'id' | 'name'>>(
+    `SELECT id, name FROM inventory_locations WHERE id = ANY($1)`,
+    [locationIds],
+  );
+  return rows.map((row) => ({ id: row.id, name: row.name }));
+}
+
+/**
  * Reads the one thing a stock workflow has to know before it posts: whether
  * this location exists, and whether stock may still be put there.
  *

@@ -1,6 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { receiveStockRequestSchema, removeStockRequestSchema } from '@ekon/shared';
+import {
+  movementHistoryQuerySchema,
+  receiveStockRequestSchema,
+  removeStockRequestSchema,
+} from '@ekon/shared';
 import { requireActor } from '../identity/index.js';
+import type { MovementHistoryService } from './movementHistoryService.js';
 import type { ReceivingService } from './receivingService.js';
 import type { RemovalService } from './removalService.js';
 import type { InventoryService } from './service.js';
@@ -25,12 +30,20 @@ import type { InventoryService } from './service.js';
  * Receiving and removal are **separate endpoints under separate capabilities**,
  * not one movement endpoint with a direction. Booking in a delivery and taking
  * a bottle off the shelf are different business acts that different people are
- * trusted with, and a generic `/api/inventory/movements` would make the
+ * trusted with, and a generic `POST /api/inventory/movements` would make the
  * difference a field in a body rather than a door somebody was given a key to.
+ * That objection is about *writing*: `GET /api/inventory/movements` reads the
+ * one ledger both of those workflows append to, and reading it is a single act
+ * under a single capability.
  */
 export function registerInventoryRoutes(
   app: FastifyInstance,
-  services: { inventory: InventoryService; receiving: ReceivingService; removal: RemovalService },
+  services: {
+    inventory: InventoryService;
+    history: MovementHistoryService;
+    receiving: ReceivingService;
+    removal: RemovalService;
+  },
 ): void {
   app.get(
     '/api/inventory/locations',
@@ -116,6 +129,34 @@ export function registerInventoryRoutes(
       const input = removeStockRequestSchema.parse(request.body);
       const result = await services.removal.removeStock({ request: input, actorId: actor.id });
       return reply.status(201).send(result);
+    },
+  );
+
+  /**
+   * What happened, and what it did to the shelf: the append-only ledger, read.
+   *
+   * `inventory.read`, the same capability that answers what is on the shelf
+   * today. History is inventory visibility — somebody who may see the numbers
+   * may see how they got there, and inventing a capability for it would mean
+   * granting one to everybody who already has the other.
+   *
+   * The query is parsed with the shared schema exactly as a body is, because a
+   * query string is request input like any other and an unparsed one is an
+   * unvalidated one. It is `.strict()`, so a mistyped parameter is refused
+   * rather than dropped — a request filtered by `varientId` would otherwise be
+   * answered with the whole ledger and look like it had worked.
+   *
+   * A `GET` and nothing but: no transaction, no lock, no clock, no balance row
+   * brought into existence to answer a read. An explicit test asserts that
+   * calling this changes neither a movement nor a balance.
+   */
+  app.get(
+    '/api/inventory/movements',
+    { config: { capability: 'inventory.read' } },
+    async (request, reply) => {
+      const query = movementHistoryQuerySchema.parse(request.query);
+      const page = await services.history.listMovements(query);
+      return reply.status(200).send(page);
     },
   );
 }
