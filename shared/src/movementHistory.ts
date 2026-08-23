@@ -190,11 +190,13 @@ export type MovementLocation = z.infer<typeof movementLocationSchema>;
  * would invite a client to reconstruct the ledger's internal structure and then
  * depend on it.
  *
- * **`reversesMovementId` is here**, and is `null` on every movement today
- * because reversal posting is not implemented. It is in the contract now so
- * that the evidence model does not have to change shape when PR 5 adds
- * corrections: a reversal names what it reverses, and that relationship is
- * evidence.
+ * **`reversesMovementId` is here**, and so is `reversedByMovementId`. The
+ * correction relationship is evidence, and it is evidence in both directions:
+ * a reversal has to say what it undid, and — more importantly — a movement that
+ * was undone has to say so, or somebody scrolling past a receipt of 10 would
+ * read it as stock the shop received and keep looking for where it went. The
+ * ledger stores the pointer on the reversal row only; the second field is
+ * derived from that same row by the read, never stored twice.
  *
  * The request hash, the operation's stored result pointer, and the balance
  * projection are all absent: they are how the server keeps its own promises.
@@ -232,8 +234,26 @@ export const inventoryMovementRecordSchema = z
     recordedAt: z.string().datetime(),
     /** The command this movement came from, and what a retry named. */
     operationId: idSchema,
-    /** The movement this one reverses. Always `null` until PR 5. */
+    /**
+     * The movement this one reverses. Set on `REVERSAL` rows and `null` on
+     * every other type — a CHECK enforces both directions (0005).
+     */
     reversesMovementId: idSchema.nullable(),
+    /**
+     * The `REVERSAL` that undid this movement, when one exists.
+     *
+     * **Derived, not stored.** The ledger keeps one pointer, on the reversal,
+     * and `UNIQUE (reverses_movement_id)` guarantees at most one reversal per
+     * movement — so this is that same unique relationship read the other way
+     * round, resolved in the history query's own join rather than by a lookup
+     * per row. There is no second column and no denormalized flag to fall out
+     * of step with the ledger.
+     *
+     * A movement carrying one is corrected, not deleted: both rows remain, both
+     * are shown, and the arithmetic of each is still exactly what the ledger
+     * recorded at the time (INV-1, INV-2).
+     */
+    reversedByMovementId: idSchema.nullable(),
     variant: movementVariantSchema,
     location: movementLocationSchema,
     actor: movementActorSchema,
