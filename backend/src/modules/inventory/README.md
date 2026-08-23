@@ -46,6 +46,247 @@ the balance projection, and every rule that protects them.
   `inventory.remove` capability. It is the first thing in the system that takes
   stock _off_ a shelf, and the first workflow that can be refused by the stock
   floor.
+- **The stock history read** (`movementHistoryService.ts`,
+  `infrastructure/movementHistoryRepository.ts`, `domain/historyCursor.ts`) and
+  `GET /api/inventory/movements` — the append-only ledger, paginated, filtered,
+  and labelled. Requires `inventory.read`. It adds no table and changes no
+  posting behaviour: the ledger was always the evidence, and this reads it.
+
+## Stock history
+
+The ledger has recorded the evidence since 0005. `GET /api/inventory/movements`
+makes it readable — what changed, by how much, from what to what, why, who
+recorded it, when the stock moved, and when Ekon recorded that it had.
+
+There is **no second history table**, no activity log, and no denormalized copy
+of a movement anywhere. A history that could disagree with the ledger would be
+worse than no history at all.
+
+### `GET /api/inventory/movements`
+
+Requires **`inventory.read`** — the same capability that answers what is on the
+shelf today. History is inventory visibility: somebody who may see the numbers
+may see how they got there, and a capability of its own would only have to be
+granted to everyone who already holds this one.
+
+The query is parsed with the shared schema exactly as a request body is, and it
+is `.strict()`: a mistyped parameter is refused rather than dropped. A request
+filtered by `varientId` would otherwise be answered with the whole ledger and
+look like it had worked.
+
+| Parameter      | Narrows to                                           |
+| -------------- | ---------------------------------------------------- |
+| `variantId`    | one variant, across every location                   |
+| `locationId`   | one location, across every variant                   |
+| `movementType` | one kind of change, from the shared vocabulary       |
+| `recordedFrom` | movements recorded at or after this instant          |
+| `recordedTo`   | movements recorded at or before this instant         |
+| `limit`        | page size, 1–100, default 50                         |
+| `cursor`       | where to resume, from a previous page's `nextCursor` |
+
+Every filter is optional and every one narrows; there is none that widens, and
+no way to ask for an unbounded answer. Omitting all of them asks for the most
+recent page of everything.
+
+```jsonc
+// GET /api/inventory/movements?variantId=019...&limit=50
+{
+  "items": [
+    {
+      "id": "019...",
+      "movementType": "ISSUE",
+      "quantityDelta": -1,
+      "quantityBefore": 7,
+      "quantityAfter": 6,
+      "reasonCode": "SOLD",
+      "note": null,
+      "occurredAt": "2026-08-23T14:20:00.000Z",
+      "recordedAt": "2026-08-23T14:22:10.000Z",
+      "operationId": "019...",
+      "reversesMovementId": null,
+      "variant": {
+        "id": "019...",
+        "productId": "019...",
+        "productName": "Bel Ami",
+        "brandName": "Steve Madden",
+        "sku": "EKN-XXXXXXXX",
+        "attributes": [{ "name": "color", "value": "Black" }],
+      },
+      "location": { "id": "019...", "name": "Main Store" },
+      "actor": { "id": "019...", "displayName": "Marie Joseph" },
+    },
+  ],
+  "nextCursor": "MjAyNi0wOC0yMy...",
+}
+```
+
+### `occurredAt` and `recordedAt` are not the same fact
+
+**`occurredAt` is business time** — when the stock physically moved, stated by
+whoever recorded the movement. A delivery counted this morning and entered this
+afternoon occurred this morning, so it may be earlier than `recordedAt`, and two
+movements may be entered out of chronological order.
+
+**`recordedAt` is server time** — when Ekon permanently recorded the fact, read
+from the injected clock inside the posting transaction. It is the order the
+ledger was written in, and because the ledger is append-only that order never
+changes.
+
+Both are returned on every record. Only one of them is an order.
+
+### Ordering, and why it is `recordedAt`
+
+`recorded_at DESC, id DESC`. Not `occurred_at`: a late entry stating an earlier
+business time would slot itself into the middle of a feed somebody had already
+read, and the ledger's insertion order would appear to rearrange itself. Sorting
+by the immutable order avoids that entirely.
+
+`id` breaks the tie. Ids are UUIDv7 and time-ordered, so within one millisecond
+`id DESC` still reads newest-first, and the pair is unique because `id` is the
+primary key — which is what makes the keyset comparison below total rather than
+merely mostly-total.
+
+The **date filters name `recordedAt` explicitly**, and that is a decision rather
+than a shorthand. The feed is ordered by recorded time, so a range on the same
+column composes with the cursor and reads from the same index; a range on
+`occurredAt` would answer a different question — "what happened on the shop
+floor that day" — against a column that is neither the sort key nor indexed.
+They are deliberately not called `from` and `to`: with two timestamps in the
+ledger, an unqualified name is a guess about which one somebody meant.
+
+### Pagination is a keyset cursor, never an offset
+
+`nextCursor` encodes an exact position — `recorded_at` and the movement id —
+and the next page resumes strictly after it. It is `null` on the last page and
+only then; a page that comes back full with a null cursor is the end, not an
+invitation to ask again.
+
+An `OFFSET` into an append-only table that grows at the front would let a
+movement posted while somebody is reading page four shift a row across a page
+boundary, so it appeared twice or not at all. A keyset resumes at a position,
+so it cannot. It also reads one index range instead of counting past every
+earlier row, which is what keeps a deep page as cheap as a shallow one
+(`inventory_movements_recorded_at_idx`, 0011).
+
+The cursor is base64url and **opaque on purpose**. It is not encryption and is
+not pretending to be — it holds a timestamp and an id the same response already
+returned. What the encoding buys is that it does not look structured, so nobody
+constructs one, and the format can change without breaking anybody who kept to
+the contract. A cursor that does not decode is a `VALIDATION_FAILED` naming the
+field, never a silent restart from the first page.
+
+### Names are current labels, not historical snapshots
+
+This is the one thing about this feed that could reasonably be misread, so it is
+stated plainly here and in the shared contract.
+
+The ledger permanently stores ids, quantities, the movement type, the reason,
+the note, both timestamps, and the actor's id. It does **not** store the
+product's name, the brand, the location's name, or the person's display name.
+Those are resolved at read time from the tables that own them today.
+
+> IDs and movement facts are historical ledger evidence. Display names are
+> current labels resolved for those permanent IDs at read time.
+
+So renaming a product changes what an old movement _displays_ while the movement
+still refers to the same immutable variant id and SKU. Nothing here is a
+snapshot of what anything was called on the day it happened, and it must not be
+read as one. If the business ever needs "what was this product called on that
+date", that is a schema decision about snapshotting history — an ADR of its own,
+not a read model.
+
+### History is not the current-stock list
+
+`GET /api/inventory/balances` filters to active variants of active products at
+active locations, because it answers what may be stocked today. History does
+none of that filtering, and must not: a movement posted last year against
+merchandise the shop has since retired, or on a shelf that has since closed, is
+exactly the record somebody goes looking for.
+
+That is why the catalog is asked through `findVariantLabels` rather than
+`listStockableVariants` — the second would silently drop those movements — and
+why locations are resolved with `findLocationLabels` rather than
+`listActiveLocations`.
+
+### The actor may not resolve, and the id is kept anyway
+
+`actor.id` is permanent ledger evidence and is always present: `user_id` is
+`NOT NULL` on every movement. `actor.displayName` is a current label and is
+`null` when the id does not resolve to a user today.
+
+That is a real state rather than a defensive one.
+`inventory_movements.user_id` deliberately carries **no foreign key** onto
+`users` (INV-11): movements existed before the identity module did, and some
+carry actor uuids that were never accounts. The id is never discarded because a
+name cannot be found, and no name is ever invented to fill the gap. A user who
+has been deactivated still resolves normally — their name has to stay readable
+on every movement they posted, which is what INV-16 deactivates rather than
+deletes them for.
+
+### Where the queries go, and how many there are
+
+**Five bounded statements for a page of any size**, and one when the page is
+empty:
+
+1. the page of movements — one statement, `limit + 1` rows;
+2. the variant labels, from the **catalog** module's service (two inside it: the
+   variants with their products and brands, then their attributes);
+3. the location labels, from this module's own location repository;
+4. the actor display names, from the **identity** module's user service.
+
+The count is constant with respect to how many movements come back. The ids are
+collected first and each lookup is asked once, in bulk — there is no query per
+movement, and nothing loads the ledger into memory to filter it there.
+
+The extra row read at step 1 is never returned. It is how the service knows
+whether another page exists without counting the rest of the ledger, and it is
+what makes `nextCursor` null exactly on the last page rather than one page late.
+
+### Module boundaries
+
+This module owns `inventory_locations`, `inventory_movements`, and
+`inventory_balances`, and reads nothing else. Merchandise names belong to the
+catalog and user names belong to identity, so both are asked for through those
+modules' application services — `catalog.findVariantLabels` and
+`identity.findUserDisplayNames`, each a narrow bulk read that returns labels and
+nothing more. No SQL in this module names `product_variants`, `products`,
+`brands`, or `users`, and the lint rule forbids importing either module's
+internals.
+
+An id that resolves to nothing is absent from those results rather than an
+error. The caller holds permanent ledger ids and decides what a missing label
+means; another module does not get to decide that a movement is unreadable.
+
+### It writes nothing
+
+No transaction is opened, no lock is taken, no clock is read, and no balance row
+is created — including for a shelf that has never held stock, which a read has
+no business bringing into existence. There is no `INSERT`, `UPDATE`, or `DELETE`
+anywhere in the history read path; the database refuses the last two on this
+table regardless (INV-1), and `scripts/check-conventions.mjs` fails the build on
+either appearing in source.
+
+An explicit test digests every movement and every balance before and after a
+series of history requests and asserts they are identical.
+
+### What it does not do
+
+`reversesMovementId` is on every record and is `null` on all of them, because
+reversal posting is not implemented. It is in the contract now so the evidence
+model does not have to change shape when PR 5 adds corrections. There is no
+reversal endpoint, no correction workflow, and no way to mutate a movement here.
+
+`previousMovementId` is **not** exposed. It is the chain pointer that makes a
+shelf's history unforkable (INV-4) — an integrity mechanism rather than a
+business fact — and it answers nothing `quantityBefore` and `quantityAfter` do
+not already answer.
+
+`ISSUE` with reason `SOLD` is returned as exactly that, and is deliberately not
+collapsed into a `SALE`. The ledger records that stock left and why; there is no
+sale entity in this system, and `Remove → SOLD` is transitional rather than the
+permanent sales architecture (ADR 11). Movement types cross the wire as their
+stable machine values — localization is the interface's problem, not the
+ledger's.
 
 ## The posting engine
 
@@ -881,12 +1122,19 @@ it arrives, zeroes and never-stocked shelves included, searches it in the
 browser, and re-reads it when somebody presses refresh or a receipt succeeds. It
 adds no query parameter, because there are none.
 
-Deferred with the stock read specifically: movement history and any history
-endpoint, low-stock thresholds, reserved stock and available-to-promise, costs
-and valuation, pagination, server-side search and filtering, exports, caching,
-and background refresh. None of them is needed to answer what is on the shelf
-today, and several of them would quietly turn an operational read into a
-reporting system.
+Deferred with the stock read specifically: low-stock thresholds, reserved stock
+and available-to-promise, costs and valuation, pagination, server-side search
+and filtering, exports, caching, and background refresh. None of them is needed
+to answer what is on the shelf today, and several of them would quietly turn an
+operational read into a reporting system. Movement history is no longer on that
+list — it is `GET /api/inventory/movements`, and it is a separate read for a
+separate question rather than a widening of the balances one.
+
+Deferred with stock history specifically: any aggregation or grouping, a running
+balance computed across pages, totals by reason or by period, CSV or any other
+export, full-text search over notes, filtering by actor, filtering by
+`occurredAt`, and any screen that renders any of it. The first several would
+turn an evidence read into a reporting engine; the last is PR 7.
 
 Deferred with receiving specifically, and deliberately: suppliers, purchase
 orders, invoices, costs, shipment records, receiving statuses, draft receipts,
