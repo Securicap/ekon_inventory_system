@@ -1,5 +1,16 @@
 # Architecture overview
 
+This document describes the **technical** architecture — the shape of the
+deployment, the layers, and where correctness is enforced. All of it is
+implemented and none of it changes with the merchandise work.
+
+What the system is _about_ — the retail merchandise domain, the
+`Classification → Product → Variant/SKU → SKU × Location` model, the count and
+reconciliation principle, and the OR1 milestone — is in
+[retail-domain-and-or1.md](retail-domain-and-or1.md), which is authoritative for
+those and is approved direction rather than a description of the code. The
+ledger guarantees below are unchanged by it.
+
 ## Shape
 
 ```

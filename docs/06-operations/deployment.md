@@ -18,14 +18,31 @@ provider-neutral.
 Sandbox, which is what proved the hosted workflow and not an approved permanent
 production environment.
 
-A **zero-cost production candidate** now exists: Ekon on a single Oracle Cloud
-Always Free VM, with Caddy in front, self-hosted PostgreSQL on an attached block
+**Nor is production OR1.** Going live is now defined as the OR1 milestone in
+[retail-domain-and-or1.md](../03-architecture/retail-domain-and-or1.md) and
+[ADR 12](../07-decisions/0012-operational-release-one.md): safe and useful
+enough to become the store's real day-to-day inventory system. The launch
+invariant below is the **tested staging baseline for the operating loop this
+document describes**, and it passed. OR1's acceptance gate is broader — a
+corrected merchandise model, history visibility, safe corrections, basic count
+and reconciliation, lifecycle control, and production data preservation on top
+of what is here — and it is exercised in PR 8. Nothing in this document is
+retracted by that; it simply is not the same gate.
+
+An **infrastructure candidate** exists: Ekon on a single Oracle Cloud Always
+Free VM, with Caddy in front, self-hosted PostgreSQL on an attached block
 volume, and a nightly backup to Object Storage. Its tooling and runbook are in
-[oci-zero-cost.md](oci-zero-cost.md). It is a _candidate_: it earns production
-status only after every box in that document's acceptance checklist is ticked —
-deployment, backup, an off-VM copy, a passing restore drill, monitoring, and the
-launch invariant performed on the shop's own hardware. Until then no real
-inventory is entered into it.
+[oci-zero-cost.md](oci-zero-cost.md). It is a _candidate_: it would earn
+production status only after every box in that document's acceptance checklist
+is ticked — deployment, backup, an off-VM copy, a passing restore drill,
+monitoring, and the launch invariant performed on the shop's own hardware. Until
+then no real inventory is entered into it.
+
+**It is one option, not the plan of record, and OR1 does not depend on it.**
+Roughly $20 has been set aside for hosting, so a paid managed platform is an
+equally legitimate choice and zero-cost infrastructure is not a requirement. The
+OR1 host is chosen in PR 8, against the acceptance gate and the budget, and is
+deliberately not chosen here.
 
 Following this document gives the business exactly this, and nothing more:
 
@@ -59,6 +76,10 @@ its middle — a product created in the browser becoming something an employee c
 book in — is asserted in
 `frontend/tests/catalog/outcomes.test.tsx`.
 
+It proved this loop, against this product model, and it keeps that credit. It is
+**not** the OR1 gate, which covers the merchandise model that replaces the one
+above.
+
 There are no adjustments, no counts, no transfers, no suppliers or purchasing,
 no sales, no reports, and no audit log. Products cannot yet be edited, renamed,
 or deactivated, and a variant cannot be added to a product that already exists;
@@ -87,16 +108,20 @@ command", that is a setting to fill in for the service in question;
 
 ## Environments
 
-| Environment          | Where                                    | Purpose                                                                                  |
-| -------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| development          | Local, and CI                            | Building and testing                                                                     |
-| `staging`            | Northflank + Supabase                    | Proves migrations against a copy of production's schema before real inventory is touched |
-| production candidate | OCI Always Free + self-hosted PostgreSQL | A validated release, deployed and being proven against the acceptance checklist          |
-| `production`         | **Not declared live**                    | The business's records                                                                   |
+| Environment  | Where                                      | Purpose                                                                                  |
+| ------------ | ------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| development  | Local, and CI                              | Building and testing                                                                     |
+| `staging`    | Northflank + Supabase                      | Proves migrations against a copy of production's schema before real inventory is touched |
+| `production` | **Not declared live; host not yet chosen** | The business's records, from OR1 onward                                                  |
 
-A release moves left to right: green in CI, proven on staging, then deployed to
-the candidate by exact commit SHA. The candidate becomes production when its
-checklist passes — not when the tooling exists.
+A release moves left to right: green in CI, proven on staging, then deployed by
+exact commit SHA to whatever production turns out to run on.
+
+The OCI Always Free stack in [oci-zero-cost.md](oci-zero-cost.md) is a
+**candidate for that host**, with working tooling and its own acceptance
+checklist; a paid managed platform within the ~$20 hosting budget is an equally
+legitimate candidate. Either way, production is declared live only when OR1's
+gate passes — not when the tooling exists, and not by a host being reachable.
 
 ## What is already true, and what a deployment must still provide
 
@@ -328,7 +353,7 @@ inventory. On a managed platform this is provider configuration:
 2. a weekly `pg_dump` to object storage, in a different account from the
    database.
 
-For the self-hosted **production candidate** the repository does now carry a
+For the self-hosted **OCI candidate** the repository does now carry a
 backup job, a schedule, and a restore drill —
 [`deploy/oci/scripts/`](../../deploy/oci/scripts/), documented in
 [oci-zero-cost.md](oci-zero-cost.md). There the backup is not provider
@@ -346,7 +371,7 @@ application reports to nobody, and nothing is shipped anywhere. What exists is
 the health endpoint and the logs the process writes to stdout, read wherever the
 hosting platform collects them.
 
-The production candidate adds one thing on top of that, and it is external to
+The OCI candidate adds one thing on top of that, and it is external to
 the application: an off-host HTTPS monitor polling `/api/health` and alerting a
 real person on a non-200. It is a configuration step in
 [oci-zero-cost.md](oci-zero-cost.md), not a dependency in this repository, and no
