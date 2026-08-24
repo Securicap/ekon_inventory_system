@@ -283,15 +283,23 @@ describe('migration 0008 — ordinary stock removal', () => {
     });
   });
 
-  it('requires a reason for exactly the shared list, and no more', async () => {
+  it('requires a reason for exactly the three types 0008 named', async () => {
+    // As 0008 left it, and this suite is staged at 0008. The list has since
+    // grown — 0013 adds `COUNT_RECONCILIATION`, because a reconciliation with
+    // no reason records that somebody moved stock to match a count and would
+    // not say why. That the *current* schema matches the current shared
+    // vocabulary is asserted by 0013's suite, against a database at head.
     const inDatabase = await checkConstraintLiterals('inventory_movements_reason_required');
-    expect([...inDatabase].sort()).toEqual([...REASON_REQUIRED_MOVEMENT_TYPES].sort());
     expect([...inDatabase].sort()).toEqual(['ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'ISSUE']);
+    // Every type 0008 named is still reason-required today; nothing was dropped.
+    for (const type of inDatabase) {
+      expect(REASON_REQUIRED_MOVEMENT_TYPES).toContain(type);
+    }
   });
 
   it('leaves the reason rule for every other movement type alone', async () => {
-    // A receipt, a count, and a reversal each carry their reason somewhere
-    // other than this column, and 0008 must not have made them say it twice.
+    // A receipt and a reversal each carry their reason somewhere other than
+    // this column, and 0008 must not have made them say it twice.
     const receipt = await insertMovement({
       quantityDelta: 4,
       quantityBefore: 5,
