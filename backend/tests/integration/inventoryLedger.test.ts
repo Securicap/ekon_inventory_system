@@ -786,6 +786,7 @@ describe('append-only protection', () => {
         quantityBefore: 5,
         quantityDelta: -2,
         previousMovementId: opening,
+        reasonCode: 'SHRINKAGE',
       }),
     ).resolves.toBeTruthy();
 
