@@ -7,6 +7,8 @@ import { openNewUser } from '../helpers/users.js';
 import { openReceiving } from '../helpers/receiving.js';
 import { openRemoval } from '../helpers/removal.js';
 import { openStock } from '../helpers/stock.js';
+import { openCounts } from '../helpers/counts.js';
+import { openHistory } from '../helpers/history.js';
 import { balanceFixture } from '../helpers/fixtures.js';
 import { viewport } from '../helpers/viewport.js';
 
@@ -55,6 +57,11 @@ const SCREENS: [string, () => Promise<unknown>][] = [
   ['receiving', () => openReceiving()],
   ['removal', () => openRemoval()],
   ['new account', () => openNewUser()],
+  // The two PR 7 destinations. Counts is opened as somebody who may record
+  // one, because the record form is a whole section of the page that a reader
+  // never sees — and a section is exactly what this is checking the level of.
+  ['counts', () => openCounts({}, { capabilities: ['inventory.read', 'inventory.count'] })],
+  ['history', () => openHistory()],
 ];
 
 /**
