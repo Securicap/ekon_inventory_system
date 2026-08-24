@@ -1,31 +1,40 @@
 import { useQuery } from '@tanstack/react-query';
 import type { HealthResponse } from '@ekon/shared';
 import { availableNavigation, shortcutNavigation, type View } from '../app/navigation.js';
+import { hasCapability } from '../auth/capabilities.js';
 import { ROLE_LABEL_KEYS } from '../auth/roles.js';
 import { useAuthenticatedUser } from '../auth/useAuth.js';
+import { useProtectedQuery } from '../auth/useProtectedQuery.js';
 import { ErrorNotice } from '../components/ErrorNotice.js';
 import { PageHeader } from '../components/PageHeader.js';
-import { PANEL } from '../components/styles.js';
+import { PANEL, SECONDARY_BUTTON } from '../components/styles.js';
 import { formatShopTime, useTranslator } from '../i18n/index.js';
 import { api } from '../lib/api.js';
+import { countsQueryKey, getCounts } from '../lib/countsApi.js';
 
 /**
  * The landing view: who you are, what you can open, and whether the system is
  * working.
  *
- * It is a starting point, not a dashboard. Stock on hand, low-stock counts,
- * movements today, value in the shop — every one of those is a number the
+ * It is a starting point, not a dashboard. Stock on hand, movements today,
+ * value in the shop, sales this week — every one of those is a number the
  * business would read as true, and the API produces none of them. A sparse
  * screen that says only what is known beats a full one that invents the rest,
  * because a made-up figure in an inventory system is not a placeholder, it is a
- * lie somebody will act on.
+ * lie somebody will act on. There are still no charts here and no tiles with
+ * totals in them.
  *
- * So there are two panels. The first is a list of doors, and it is exactly the
- * doors the shell would show — same list, same capabilities, one source. The
- * second is the health panel kept from Sprint 0: the only thing in the
- * application that has ever proved browser → Fastify → Postgres end to end, and
- * still the fastest way to tell whether a deploy is serving the schema it
- * thinks it is.
+ * There is now **one** thing on it that is not a door, and it earns its place
+ * by being work rather than a metric: *unexplained count differences*. It is a
+ * count of open discrepancies — a number the server already keeps, that means
+ * exactly one thing, and that names something a person has to go and do. No
+ * threshold, no trend, no colour scale; when there are none, the panel is not
+ * drawn at all.
+ *
+ * Otherwise: a list of doors, which is exactly the doors the shell would show —
+ * same list, same capabilities, one source — and the health panel kept from
+ * Sprint 0, still the fastest way to tell whether a deploy is serving the
+ * schema it thinks it is.
  */
 export function HomeScreen({ onNavigate }: { onNavigate: (view: View) => void }) {
   const t = useTranslator();
@@ -40,6 +49,23 @@ export function HomeScreen({ onNavigate }: { onNavigate: (view: View) => void })
   });
 
   const shortcuts = shortcutNavigation(availableNavigation(user));
+
+  /**
+   * Unresolved count differences, for somebody who may see stock at all.
+   *
+   * The first page of the open feed and nothing more — the length of one page
+   * is enough to say "there is work here", and this screen deliberately does
+   * not ask the server for a total it would then have to keep accurate. Sharing
+   * the Counts screen's own query key means arriving there shows what this
+   * panel counted, and reconciling one updates both.
+   */
+  const openCounts = useProtectedQuery({
+    queryKey: countsQueryKey({ status: 'OPEN' }),
+    queryFn: ({ signal }) => getCounts({ status: 'OPEN' }, null, signal),
+    enabled: hasCapability(user, 'inventory.read'),
+  });
+
+  const discrepancies = openCounts.data?.items.length ?? 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -58,6 +84,28 @@ export function HomeScreen({ onNavigate }: { onNavigate: (view: View) => void })
           )
         }
       />
+
+      {/* Only when there is something to attend to. An empty attention panel is
+          a permanent reminder that nothing is wrong, which is noise. */}
+      {discrepancies > 0 && (
+        <section
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning bg-warning-soft px-4 py-3"
+          aria-labelledby="home-attention"
+        >
+          <div>
+            <h2 id="home-attention" className="text-[15px] font-semibold text-warning-ink">
+              {t(discrepancies === 1 ? 'home.openCountsOne' : 'home.openCounts', {
+                count: discrepancies,
+              })}
+            </h2>
+            <p className="text-sm text-warning-ink">{t('home.openCountsHint')}</p>
+          </div>
+
+          <button type="button" className={SECONDARY_BUTTON} onClick={() => onNavigate('counts')}>
+            {t('home.openCountsAction')}
+          </button>
+        </section>
+      )}
 
       <div className="grid items-start gap-6 lg:grid-cols-[1.5fr_1fr]">
         <section className={`${PANEL} flex flex-col gap-3.5`} aria-labelledby="home-tasks">
