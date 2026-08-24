@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { VariantStockBalance } from '@ekon/shared';
 import { useTranslator } from '../../i18n/index.js';
 import { formatVariantAttributes } from '../../lib/variants.js';
@@ -23,7 +24,13 @@ import { CELL, HEAD } from './tableStyles.js';
  * variant, and the SKU it belongs to, which is more identity than the desktop
  * row header carries, not less.
  */
-export function InventoryTabletTable({ balances }: { balances: readonly VariantStockBalance[] }) {
+export function InventoryTabletTable({
+  balances,
+  renderActions,
+}: {
+  balances: readonly VariantStockBalance[];
+  renderActions?: ((variant: VariantStockBalance) => ReactNode) | undefined;
+}) {
   const t = useTranslator();
 
   return (
@@ -40,6 +47,11 @@ export function InventoryTabletTable({ balances }: { balances: readonly VariantS
             <th scope="col" className={`${HEAD} w-[18%] text-right`}>
               {t('stock.total')}
             </th>
+            {renderActions !== undefined && (
+              <th scope="col" className={HEAD}>
+                <span className="sr-only">{t('stock.columnActions')}</span>
+              </th>
+            )}
           </tr>
         </thead>
 
@@ -73,6 +85,8 @@ export function InventoryTabletTable({ balances }: { balances: readonly VariantS
               <td className={`${CELL} tabular text-right text-base font-semibold text-ink`}>
                 {variant.totalQuantity}
               </td>
+
+              {renderActions !== undefined && <td className={CELL}>{renderActions(variant)}</td>}
             </tr>
           ))}
         </tbody>

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { VariantStockBalance } from '@ekon/shared';
 import { useTranslator } from '../../i18n/index.js';
 import { formatVariantAttributes } from '../../lib/variants.js';
@@ -19,7 +20,13 @@ import { LocationBreakdown } from './LocationBreakdown.js';
  * the right edge that carry it on a laptop carry nothing to somebody listening
  * to the page.
  */
-export function InventoryRecords({ balances }: { balances: readonly VariantStockBalance[] }) {
+export function InventoryRecords({
+  balances,
+  renderActions,
+}: {
+  balances: readonly VariantStockBalance[];
+  renderActions?: ((variant: VariantStockBalance) => ReactNode) | undefined;
+}) {
   const t = useTranslator();
 
   return (
@@ -57,6 +64,10 @@ export function InventoryRecords({ balances }: { balances: readonly VariantStock
           </p>
 
           <LocationBreakdown locations={variant.locations} />
+
+          {/* Under the record on a phone, where a thumb reaches them without
+              covering the number they are about. */}
+          {renderActions !== undefined && renderActions(variant)}
         </li>
       ))}
     </ul>
