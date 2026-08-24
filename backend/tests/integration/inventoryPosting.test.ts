@@ -271,7 +271,11 @@ describe('posting onto an existing chain', () => {
       command(chain, { movementType: 'ADJUSTMENT_IN', quantityDelta: 4, reasonCode: 'FOUND' }),
     );
     await ledger.postMovement(
-      command(chain, { movementType: 'COUNT_RECONCILIATION', quantityDelta: -3 }),
+      command(chain, {
+        movementType: 'COUNT_RECONCILIATION',
+        quantityDelta: -3,
+        reasonCode: 'SHRINKAGE',
+      }),
     );
 
     const { rows } = await db.pool.query<{ total: string }>(
@@ -316,14 +320,22 @@ describe('direction rules', () => {
   it('accepts a COUNT_RECONCILIATION in either direction', async () => {
     const up = await newChain();
     const found = await ledger.postMovement(
-      command(up, { movementType: 'COUNT_RECONCILIATION', quantityDelta: 4 }),
+      command(up, {
+        movementType: 'COUNT_RECONCILIATION',
+        quantityDelta: 4,
+        reasonCode: 'MISSED_RECEIPT',
+      }),
     );
     expect(found.quantityAfter).toBe(4);
 
     const down = await newChain();
     await ledger.postMovement(command(down, { quantityDelta: 10 }));
     const missing = await ledger.postMovement(
-      command(down, { movementType: 'COUNT_RECONCILIATION', quantityDelta: -6 }),
+      command(down, {
+        movementType: 'COUNT_RECONCILIATION',
+        quantityDelta: -6,
+        reasonCode: 'UNRECORDED_SALE',
+      }),
     );
     expect(missing.quantityAfter).toBe(4);
   });
@@ -386,6 +398,7 @@ describe('the stock floor', () => {
     const rejected = command(chain, {
       movementType: 'COUNT_RECONCILIATION',
       quantityDelta: -1,
+      reasonCode: 'SHRINKAGE',
     });
     const error = await postFails(rejected);
 
@@ -415,12 +428,36 @@ describe('reason codes', () => {
     expect(error.details?.some((d) => d.path === 'reasonCode')).toBe(true);
   });
 
-  it('does not require a reason code for a receipt or a count', async () => {
+  it('does not require a reason code for a receipt', async () => {
+    // A receipt carries its reason in its type: stock arrived.
     const chain = await newChain();
     await expect(ledger.postMovement(command(chain, { quantityDelta: 1 }))).resolves.toBeTruthy();
+  });
+
+  it('requires a reason code for a count reconciliation', async () => {
+    // 0013 moved this one. A reconciliation says the shop accepted that the
+    // shelf and the record differ, and the same −1 accepted as an unrecorded
+    // sale or as shrinkage is the same arithmetic and opposite conclusions —
+    // one of them being the shop discovering it is losing stock.
+    const chain = await newChain();
+    const error = await postFails(
+      command(chain, {
+        movementType: 'COUNT_RECONCILIATION',
+        quantityDelta: 2,
+        reasonCode: null,
+      }),
+    );
+    expect(error.code).toBe('VALIDATION_FAILED');
+    expect(error.details?.some((d) => d.path === 'reasonCode')).toBe(true);
+    expect(await countMovements(chain)).toBe(0);
+
     await expect(
       ledger.postMovement(
-        command(chain, { movementType: 'COUNT_RECONCILIATION', quantityDelta: 2 }),
+        command(chain, {
+          movementType: 'COUNT_RECONCILIATION',
+          quantityDelta: 2,
+          reasonCode: 'MISSED_RECEIPT',
+        }),
       ),
     ).resolves.toBeTruthy();
   });

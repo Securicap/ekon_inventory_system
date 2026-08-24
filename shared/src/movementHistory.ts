@@ -240,6 +240,22 @@ export const inventoryMovementRecordSchema = z
      */
     reversesMovementId: idSchema.nullable(),
     /**
+     * The physical count this movement reconciled, when it is one.
+     *
+     * Non-null on `COUNT_RECONCILIATION` movements and null on every other
+     * type, which is the same nullable-relationship shape as the two fields
+     * above. **Derived, not stored**: the ledger carries no count column at
+     * all — `inventory_count_lines.reconciliation_movement_id` is the single
+     * pointer, it is unique, and the history query reads it back through that
+     * unique index in its own join. One relationship, one place it lives.
+     *
+     * It is what turns a reconciliation from an unexplained stock change into
+     * evidence: the count says what was expected and what was seen, this
+     * movement says what the shop did about it, and either one leads to the
+     * other.
+     */
+    countId: idSchema.nullable(),
+    /**
      * The `REVERSAL` that undid this movement, when one exists.
      *
      * **Derived, not stored.** The ledger keeps one pointer, on the reversal,

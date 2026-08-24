@@ -1,7 +1,7 @@
 # `inventory` module
 
 **Owns:** `inventory_locations`, `inventory_movements`, `inventory_balances`,
-and later `stock_counts`, `stock_count_lines`.
+`inventory_count_lines`, and `operations`.
 
 **Responsibility:** the places stock can sit, the append-only movement history,
 the balance projection, and every rule that protects them.
@@ -65,6 +65,14 @@ the balance projection, and every rule that protects them.
   stock? It exists so archiving can be refused while any remains, without either
   module querying the other's tables. Read-only, no transaction of its own, and
   deliberately one method rather than a query API.
+- **Physical counts** (`countService.ts`, `infrastructure/countRepository.ts`,
+  `domain/countRequestHash.ts`, `domain/countReconciliationRequestHash.ts`) and
+  `POST /api/inventory/counts`, `GET /api/inventory/counts`,
+  `POST /api/inventory/counts/:countId/reconcile` — what somebody physically saw
+  on a shelf, the discrepancy that leaves, and the one movement that settles it
+  when a person accepts the difference. The count table is this module's second
+  source of durable evidence, and the first thing here that records something
+  the ledger cannot.
 
 ## Stock history
 
@@ -1387,15 +1395,347 @@ visible at all.
   locations, and operations is `ON DELETE RESTRICT` (INV-12). No balance rows are
   seeded: an absent row means zero.
 
+## Physical counts
+
+> **A count observes. Investigation explains. Reconciliation changes stock.**
+
+```text
+SYSTEM EXPECTED  +  PHYSICAL OBSERVATION
+           ↓
+       DISCREPANCY
+           ↓
+     INVESTIGATION
+           ↓
+RECONCILIATION DECISION
+           ↓
+COUNT_RECONCILIATION movement, if the variance is not zero
+```
+
+Three acts, and this module keeps them three. Recording that six were seen where
+Ekon expected seven leaves the balance reading seven and the ledger untouched.
+The one unmatched unit is **evidence**, and the whole workflow exists to stop it
+being overwritten.
+
+### Why not just set the balance to what was counted
+
+Because six may be six for at least six different reasons — a customer bought
+one and nobody rang it up, one broke, a delivery was never entered, somebody
+mis-keyed a receipt, the last one is on another shelf, or it was stolen — and
+those are not the same event. A system that flattens all of them into "adjust to
+six" cannot tell a shop it is being stolen from. The variance is the signal; the
+reconciliation reason is what somebody concluded after looking into it.
+
+### `POST /api/inventory/counts` — record an observation
+
+Requires **`inventory.count`**, which the default seed withholds from
+`EMPLOYEE`. `201`, and `201` again on a retry.
+
+```jsonc
+// request
+{
+  "operationId": "0198f0a0-…",
+  "variantId": "0198f0a0-…",
+  "locationId": "0198f0a0-…",
+  "countedQuantity": 6,          // what was physically there; zero is valid
+  "countedAt": "2026-08-23T18:20:00-04:00"
+}
+
+// 201 Created — the observation, as persisted
+{
+  "id": "0198f0a0-…",
+  "variant": { "id": "…", "productName": "Bel Ami", "sku": "EKN-…", "attributes": [] },
+  "location": { "id": "…", "name": "Main Store" },
+  "expectedQuantity": 7,         // the server's, from the balance projection
+  "countedQuantity": 6,
+  "variance": -1,
+  "countedAt": "…",
+  "recordedAt": "…",
+  "counter": { "id": "…", "displayName": "…" },
+  "status": "OPEN",
+  "reconciliation": null
+}
+```
+
+**No movement id, because there is no movement.** A discrepancy has not changed
+anything yet, and a match never will.
+
+### The expected quantity is the server's
+
+This is the heart of INV-9. `expectedQuantity` is read from
+`inventory_balances` **inside the recording transaction**, under a shared row
+lock so nothing can move the shelf between the read and the insert. The request
+schema refuses it, along with `variance` and `status`, which the database
+derives.
+
+A client that could supply the expected quantity could manufacture any variance
+it liked — and the variance is the entire evidentiary content of the row.
+
+**An absent balance row is zero and stays absent.** A shelf that has never held
+stock expects nothing; recording a count of three against it produces a variance
+of `+3` and creates no balance row. Only a reconciliation that actually moves
+stock brings one into existence.
+
+**The lock lives for the milliseconds the transaction takes.** There is no count
+mode: sales and receipts continue against a counted shelf while somebody
+investigates, which is exactly why reconciliation applies the observed
+_difference_ rather than setting the balance to what was counted.
+
+### The snapshot is permanent
+
+```text
+Count entered:            Later, a legitimate sale:
+  expected = 7              balance becomes 6
+  counted  = 6
+  variance = -1           The count still says 7 / 6 / -1.
+```
+
+Movements posted afterwards change today's balance and change nothing here, and
+no read recomputes the variance against the current balance — that would rewrite
+the evidence every time the shop traded. A `BEFORE UPDATE` trigger refuses any
+change to what was counted, where, by whom, when, or what was expected: **a
+wrong count is corrected by recording a new one**, never by editing the old.
+
+### Status
+
+| status       | means                                                       |
+| ------------ | ----------------------------------------------------------- |
+| `MATCHED`    | the shelf agreed. Settled on arrival; nothing to accept.    |
+| `OPEN`       | a variance nobody has resolved yet.                         |
+| `RECONCILED` | a variance somebody accepted, with a reason and a movement. |
+
+Derived by the database from the variance and whether a reconciliation exists,
+so it cannot disagree with the numbers beside it and no client may state one.
+
+`MATCHED` and `RECONCILED` are deliberately not one "settled" value: nothing was
+decided about a match, and calling it reconciled would attribute a judgement to
+somebody who never made one. A zero-variance count needs no second request and
+posts nothing — the ledger forbids a zero delta, and a `COUNT_RECONCILIATION` of
+zero would be a movement that changed nothing.
+
+### `POST /api/inventory/counts/:countId/reconcile` — accept a discrepancy
+
+Requires **`inventory.count`** and deliberately **not** `inventory.adjust`. A
+reconciliation is its own movement semantics: the shop accepting a physically
+observed difference, with the count as evidence. An adjustment needs no
+observation behind it, and routing one through the other's capability would say
+the two are the same authority.
+
+```jsonc
+// request
+{ "operationId": "0198f0a0-…", "reason": "SHRINKAGE", "note": "…" }
+
+// 200 OK — the count, settled, with `reconciliation.movementId` inside it
+```
+
+`200` and not `201`: the resource addressed is the count, it already existed,
+and the response is that count settled.
+
+The body carries a decision and nothing else. The variant, the location, and the
+delta all come from the persisted count, so `variantId`, `locationId`,
+`variance`, `quantityDelta`, `movementType`, `movementId` and `reconciledBy` are
+all refused.
+
+### The reasons
+
+`UNRECORDED_SALE`, `MISSED_RECEIPT`, `DAMAGED`, `MISPLACED_STOCK`, `SHRINKAGE`,
+`DATA_ENTRY_ERROR`, `OTHER` — and `OTHER` requires a note.
+
+They name **why the difference was accepted**, which is a different question
+from why stock left (`REMOVAL_REASONS`) or why a number was wrong
+(`ADJUSTMENT_REASONS`).
+
+**`COUNTING_ERROR` is deliberately absent**, and it is the most important
+omission in the workflow. If the count itself was wrong then the shelf never
+differed and there is nothing to accept — the answer is to count again and
+record a new observation, leaving both the mistaken count and the corrected one
+as evidence. A reason that let somebody post a stock movement derived from a
+quantity they believe is false would make this workflow a way of laundering bad
+data through the ledger.
+
+**`SHRINKAGE` and not `THEFT`**: a count can establish that stock is gone and
+cannot establish who took it. The note is where somebody writes what was found.
+
+An investigation that identifies a specific unrecorded sale has a better answer
+than reconciling: record the missing `ISSUE`. Nothing here converts a negative
+variance into a sale automatically, and the reason preserved is the one the
+authorized person actually chose.
+
+### The delta, and the current balance
+
+```text
+delta = counted_quantity - expected_quantity
+```
+
+Applied to the **current** balance, never used to set it.
+
+```text
+balance 7 → count (expected 7, counted 6, variance −1) → sale of 1 → balance 6
+                                                   ↓
+                                        reconcile: 6 + (−1) = 5
+```
+
+Five is correct: the count saw six, one sold afterwards, and five is what is
+physically there. Setting the balance to the counted quantity would silently
+discard the sale.
+
+The stock floor still applies. An old variance of −8 against a shelf that has
+since fallen to 5 would leave −3, so it is refused with `INSUFFICIENT_STOCK`
+(`422`) — never clamped, never reduced, and never marked settled without a
+movement. The count stays `OPEN`, which is the honest outcome: the discrepancy
+is still unexplained and now demonstrably needs somebody to look at what was
+posted since.
+
+### The movement
+
+The server supplies every field: `movementType = COUNT_RECONCILIATION`,
+`quantityDelta = counted − expected`, the variant and location from the count,
+the reason from the decision, and the actor from the session.
+
+**`occurredAt` is the count's own `countedAt`.** The discrepancy existed when the
+shelf was walked; accepting it a day later is a decision about that past
+observation, not a new event on the shelf — and `occurred_at` is business time
+precisely so it does not have to be the moment somebody got round to the
+paperwork. `recordedAt` remains the ledger's own, sampled inside the posting
+transaction. The count's `reconciledAt` is that same instant, so the two rows
+cannot disagree about when the decision was recorded.
+
+### Traceability
+
+**One pointer, on the count**: `inventory_count_lines.reconciliation_movement_id`,
+unique, with composite foreign keys proving the movement is a
+`COUNT_RECONCILIATION` on the counted shelf. The ledger carries no count column
+at all — a second pointer would be a second authority for one fact, and the
+ledger is the table that must never hold a fact it does not need.
+
+Read the other way, `GET /api/inventory/movements` exposes `countId` on
+reconciliation movements, resolved through that same unique index in the history
+query's own join. So either record leads to the other:
+
+```text
+count ──reconciliation.movementId──▶ movement
+count ◀────────── countId ────────── movement
+```
+
+### Atomicity
+
+The movement and the settled count **commit together or neither commits**.
+
+That is why `LedgerService` exposes `postMovementInTransaction` beside
+`postMovement`: the count service opens the transaction, locks the count row,
+and hands that transaction to the engine. Calling `postMovement` from inside
+would open a second transaction and commit half the workflow; reimplementing the
+claim, the lock, the chain, the floor and the projection update inside the count
+service would be a second ledger, and the second one is the one that gets the
+stock floor wrong. `postMovement` is now a two-line `withTransaction` wrapper
+around the same function, so there is one posting algorithm.
+
+A count marked reconciled with no movement behind it is a stock change the shop
+believes happened and did not; a movement whose count still reads unresolved is
+a stock change nobody can explain. Neither is reachable — by the transaction,
+and by a CHECK that makes the pair inseparable in a row.
+
+### Concurrency
+
+Two people accepting one discrepancy contend on the count row's `FOR UPDATE`
+lock. One settles it; the other finds it settled and gets a `409` naming the
+decision that won. **One discrepancy, one movement**, whatever the interleaving.
+
+A genuine _retry_ — the same operation id, queued behind its own in-flight first
+attempt — is answered with the count it already produced rather than a conflict,
+because telling a client its own successful command failed is worse than saying
+nothing. An operation id reused with a _different_ decision is still refused.
+
+### Reversing a reconciliation
+
+A `COUNT_RECONCILIATION` is an ordinary movement and can be reversed like any
+other (PR 5). Reversing it does **not** walk the count back to `OPEN`, and
+nothing here mirrors later ledger corrections into count records.
+
+The count keeps saying what it always said: this was expected, this was seen,
+this was accepted, and this movement resulted. That the movement was later
+reversed is the ledger's story, and the ledger already tells it —
+`reversedByMovementId` on the reconciliation, and the reversal itself in
+history.
+
+### Count history is not movement history
+
+They answer different questions and neither can be derived from the other:
+
+| read                           | answers                 |
+| ------------------------------ | ----------------------- |
+| `GET /api/inventory/movements` | what changed the stock? |
+| `GET /api/inventory/counts`    | what did somebody see?  |
+
+A matched count posts nothing. An unresolved discrepancy posts nothing. Both are
+exactly the records somebody needs when investigating, and neither exists in the
+ledger — which is why counts have their own table and their own read.
+
+`GET /api/inventory/counts` requires **`inventory.read`**, the same capability
+that answers what is on the shelf and how it got there: seeing a discrepancy is
+inventory visibility, and _acting_ on one is what needs `inventory.count`. It
+filters by `status`, `variantId`, `locationId`, and a `recordedAt` range, pages
+with the same keyset cursor the movement feed uses, and orders by
+`recorded_at DESC, id DESC`.
+
+**Evidence is not filtered by what is operational today.** A count of
+merchandise since archived, on a shelf since closed, by somebody since
+deactivated, resolves and reads normally.
+
+**Labels are current, not historical** — the same rule as movement history. The
+count stores ids, quantities, timestamps and decisions; the product name, the
+brand, the location name and the people's names come from the tables that own
+them today. Renaming a product changes what an old count _displays_ while the
+count still refers to the same immutable variant id and SKU.
+
+### Lifecycle
+
+`ACTIVE` and `DISCONTINUED` merchandise can be counted — discontinued stock is
+real stock on a real shelf, and a stocktake that skipped it would be counting
+some of the shop's inventory and calling it all of it. `ARCHIVED` cannot:
+archiving asserts the merchandise holds nothing anywhere, so there is nothing to
+count, and a count that found something would be evidence the archive was wrong
+rather than a variance to reconcile.
+
+The catalog decides all of that, through `findVariantForCounting`. This module
+does not interpret lifecycle.
+
+A count is recorded only against an **active** location. Reconciliation
+deliberately does not re-check that: the observation was made while the shelf
+was open, and closing a location afterwards must not leave the discrepancy
+permanently unresolvable for a reason that has nothing to do with it — the same
+rule reversal follows.
+
+### A count is not an adjustment
+
+|            | says                                             |
+| ---------- | ------------------------------------------------ |
+| adjustment | "we know the recorded number is wrong"           |
+| count      | "we physically observed X while Ekon expected Y" |
+
+Both end in the ledger, and they mean permanently different things. Count
+reconciliation does **not** call the adjustment service: it posts its own
+movement type, under its own capability, with the count as evidence behind it.
+
+---
+
 ## Deferred (future PRs)
 
-Physical counts and their reconciliation — PR 6. Transfers, multi-location stock
-behaviour, and location management (create / rename / deactivate). Offline sync
-remains deferred too.
+Transfers, multi-location stock behaviour, and location management (create /
+rename / deactivate). Offline sync remains deferred too.
 
-Every screen for what this PR added is **PR 7**: there is no adjustment form, no
-reversal button, and no history view. The API is complete and the interface is
-not, deliberately and in that order.
+Every screen for adjustments, reversal, lifecycle, history and counts is
+**PR 7**: there is no adjustment form, no reversal button, no history view, and
+no count screen. The API is complete and the interface is not, deliberately and
+in that order.
+
+Deferred with physical counts specifically, and each of them is a decision
+rather than an omission: count **sessions** and scheduled stocktake campaigns,
+blind counts, double counts, approval thresholds, manager review queues,
+discrepancy alerting, automatic reconciliation of any kind, and automatic
+reconstruction of the sale a negative variance might imply. The last two are the
+same mistake twice: the whole workflow exists so that a person decides what a
+variance meant, and a system that guessed would be back to overwriting the
+balance with extra steps.
 
 Deferred with adjustments specifically: bulk or multi-line adjustments, an
 approval workflow above them, configurable or per-shop reason administration,

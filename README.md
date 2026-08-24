@@ -30,7 +30,13 @@ authoritative **lifecycle** — `ACTIVE → DISCONTINUED → ARCHIVED`, set thro
 `PATCH /api/catalog/{products,variants}/:id/lifecycle` under
 `catalog.deactivate` — which decides what may be received, issued, counted, and
 corrected; discontinued stock stays visible and sellable, and merchandise
-holding stock cannot be archived. The
+holding stock cannot be archived. And the shop can now **count what is actually
+on the shelf**: `POST /api/inventory/counts` records what somebody saw against
+what Ekon expected and changes no stock, the variance stays visible until
+somebody accepts it, and
+`POST /api/inventory/counts/:countId/reconcile` posts the one
+`COUNT_RECONCILIATION` that carries it — **a count observes, investigation
+explains, reconciliation changes stock.** The
 `identity` module holds the users, sessions, and role-capability schema, the
 first-owner bootstrap command, and now **session authentication** — sign in,
 sign out, and `GET /api/auth/me`, behind an http-only cookie carrying an opaque
@@ -65,9 +71,9 @@ a dropped connection removes the stock once. A confirmed removal refreshes the
 current-stock numbers everyone reads.
 
 The screens are a temporary shell, not the platform's visual design — no
-dashboard, no design system. Adjustment, reversal, lifecycle control, and stock
-history are **API only**: the screens for them are PR 7, and physical counts are
-PR 6.
+dashboard, no design system. Adjustment, reversal, lifecycle control, stock
+history and **physical counts** are all **API only**: every screen for them is
+PR 7.
 
 ## Where this is going
 

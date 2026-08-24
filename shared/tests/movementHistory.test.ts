@@ -21,6 +21,7 @@ const RECORD = {
   operationId: '00000000-0000-7000-8000-000000000002',
   reversesMovementId: null,
   reversedByMovementId: null,
+  countId: null,
   variant: {
     id: '00000000-0000-7000-8000-000000000003',
     productId: '00000000-0000-7000-8000-000000000004',
@@ -198,6 +199,17 @@ describe('movement history record contract', () => {
     });
     expect(reversed.reversedByMovementId).toBe('00000000-0000-7000-8000-00000000000c');
     expect(reversed.reversesMovementId).toBeNull();
+  });
+
+  it('carries the count a reconciliation settled, and null on everything else', () => {
+    const reconciliation = inventoryMovementRecordSchema.parse({
+      ...RECORD,
+      movementType: 'COUNT_RECONCILIATION',
+      reasonCode: 'SHRINKAGE',
+      countId: '00000000-0000-7000-8000-00000000000d',
+    });
+    expect(reconciliation.countId).toBe('00000000-0000-7000-8000-00000000000d');
+    expect(inventoryMovementRecordSchema.parse(RECORD).countId).toBeNull();
   });
 
   it('requires both reversal fields to be stated, even as null', () => {

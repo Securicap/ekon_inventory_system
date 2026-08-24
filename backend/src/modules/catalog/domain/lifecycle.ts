@@ -44,7 +44,7 @@ export interface MerchandisePolicy {
   mayReceive: boolean;
   /** May stock be taken off the shelf? `ISSUE`. */
   mayIssue: boolean;
-  /** May it be counted? `COUNT_RECONCILIATION` — the workflow is PR 6's. */
+  /** May it be physically counted, and a variance reconciled? */
   mayCount: boolean;
   /** May its recorded history be corrected? `ADJUSTMENT_*` and `REVERSAL`. */
   mayCorrect: boolean;

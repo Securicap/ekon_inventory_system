@@ -92,8 +92,9 @@ chain.
 
 ## INV-5 — Stock changes are atomic
 
-The movement insert, the balance update, the `operations` row, and any audit
-event commit in one transaction, or none of them do.
+The movement insert, the balance update, the `operations` row, the count
+settlement that accompanies a reconciliation, and any audit event commit in one
+transaction, or none of them do.
 
 _Enforcement:_ a single `withTransaction` unit of work per command, with
 `SELECT ... FOR UPDATE` on the balance row. Implemented for normal movements by
@@ -104,10 +105,19 @@ operation result all commit together or not at all. The engine is internal —
 nothing HTTP reaches it. Audit events join the same transaction when the audit
 module lands.
 
+Count reconciliation is the one workflow that writes something _besides_ the
+movement, and it is why `LedgerService` exposes `postMovementInTransaction`
+alongside `postMovement`: the engine joins the caller's unit of work rather than
+opening a second one, so there is one posting algorithm and no path that can
+commit half a reconciliation (INV-9).
+
 _Verified by:_ `backend/tests/integration/inventoryPostingConcurrency.test.ts`,
 which forces transactions to genuinely overlap and checks that writers to one
 (variant, location) serialize behind its balance row lock while independent
-chains proceed in parallel. The guarantee is PostgreSQL's row-lock semantics at
+chains proceed in parallel, and
+`backend/tests/integration/inventoryCountConcurrency.test.ts`, which forces a
+failure between a reconciliation's movement and its settlement and asserts that
+neither survives. The guarantee is PostgreSQL's row-lock semantics at
 `READ COMMITTED` on a single database — no retry loop, no isolation change.
 
 ## INV-6 — The projection always equals the ledger
@@ -122,8 +132,12 @@ the projection from the ledger — always safe, because the ledger is immutable.
 
 ## INV-7 — Every command applies at most once
 
-_Enforcement:_ the `operations.id` primary key (0005) plus the posting engine's
-`INSERT ... ON CONFLICT (id) DO NOTHING RETURNING id`. No row returned means
+_Enforcement:_ the `operations.id` primary key (0005) plus
+`INSERT ... ON CONFLICT (id) DO NOTHING RETURNING id` in
+`infrastructure/operationRepository.ts` — shared by the posting engine and by
+count recording, which claims an operation without posting a movement at all
+because a duplicated observation is durable evidence of a shelf-check that never
+happened twice. No row returned means
 replay: it loads the row, compares `operation_type` and `request_hash`, and
 either returns the movement the first attempt posted or fails with `409`
 (`OPERATION_REPLAYED_WITH_DIFFERENT_BODY`) if either differs. Never
@@ -160,10 +174,97 @@ deliberately no capability that grants an override.
 
 ## INV-9 — Physical counts reconcile, never overwrite
 
-A count line produces a `COUNT_RECONCILIATION` movement of
-`counted_quantity - expected_quantity`. `expected_quantity` is snapshotted when
-the line is entered, so the recorded discrepancy is what the counter actually
-saw. A zero delta records the line and creates no movement.
+> **A count observes. Investigation explains. Reconciliation changes stock.**
+
+A count line records what somebody physically saw and what Ekon expected at that
+moment. It changes no stock. The variance stays visible until somebody with
+authority accepts it, and only then does a `COUNT_RECONCILIATION` movement of
+`counted_quantity - expected_quantity` post through the ordinary posting engine.
+A zero variance records the line and creates no movement — the ledger forbids a
+zero delta, and correctly.
+
+The rule this exists to prevent is the one-line version: _counted six, so set
+the balance to six_. That destroys the only signal the shop had. Six may be six
+because a customer bought one and nobody rang it up, because one broke, because
+a delivery was never entered, because somebody mis-keyed a receipt, because the
+last one is on another shelf, or because it was stolen — and those are not the
+same event.
+
+**The expected quantity is server-owned and permanently snapshotted.** It is
+read from `inventory_balances` inside the recording transaction, under a shared
+row lock so nothing moves the shelf between the read and the insert; no request
+schema accepts one. Movements posted afterwards change today's balance and
+change nothing about the count, and no read recomputes the variance against the
+current balance.
+
+**Reconciliation applies the observed difference to the current balance**, never
+setting it to what was counted. Seven expected, six counted, one legitimately
+sold in between: the shelf ends at five, because five is what is actually there.
+The stock floor still applies (INV-8) — an old negative variance can become
+impossible, and it is refused with `INSUFFICIENT_STOCK` rather than clamped,
+reduced, or marked settled without a movement.
+
+**A discrepancy is accepted once, and the acceptance says why.** The reason
+comes from a closed vocabulary that deliberately excludes `COUNTING_ERROR`: if
+the count itself was wrong then the shelf never differed and there is nothing to
+accept — the answer is to count again and record a new observation.
+
+_Enforcement:_ `inventory_count_lines` (0013), and most of it is the schema
+rather than the service.
+
+- `variance` and `status` are **generated columns**. The database computes
+  `counted_quantity - expected_quantity` and derives `MATCHED` / `OPEN` /
+  `RECONCILED` from the variance and whether a reconciliation exists, so three
+  numbers cannot disagree and no code path can write a status that contradicts
+  them. PostgreSQL rejects any attempt to insert or update either.
+- `CHECK ((reconciled_at IS NULL) = (reconciliation_movement_id IS NULL))` — a
+  settled count has a movement, and a movement means a settled count. This is
+  the atomicity invariant as a row rule.
+- `CHECK (counted_quantity <> expected_quantity OR reconciled_at IS NULL)` — a
+  match is never reconciled.
+- `CHECK (num_nonnulls(reason, reconciled_by, reconciled_at, operation) IN
+(0, 4))` — a reconciliation is a complete fact or it is absent.
+- `CHECK` on the reason vocabulary, mirrored by `COUNT_RECONCILIATION_REASONS`
+  in `@ekon/shared`, plus `OTHER` requiring a note. An integration test compares
+  the two sets.
+- `UNIQUE (reconciliation_movement_id)` plus two composite foreign keys — onto
+  `(id, movement_type)` and `(id, variant_id, location_id)` — so the movement a
+  count names is a `COUNT_RECONCILIATION` on the counted shelf, and no second
+  count can claim it. `reconciliation_movement_type` is generated, so it cannot
+  even be misstated.
+- A `BEFORE UPDATE` trigger raising `restrict_violation` on any change to the
+  observation (what, where, who, when, expected, counted) and on any change at
+  all once the count is reconciled. **The observation is immutable and the
+  decision is one-way**: a wrong count is corrected by recording a new one, and
+  a wrong decision by reversing its movement (INV-2). Neither rewrites history.
+- `COUNT_RECONCILIATION` joins the reason-required movement types
+  (`inventory_movements_reason_required`, 0013), so an unexplained reconciliation
+  cannot be written by any path.
+
+_Atomicity:_ the movement and the settled count commit in **one transaction**
+(INV-5). The count service locks the count row, posts through the ledger's
+`postMovementInTransaction` — the same posting algorithm every other workflow
+uses, joined to the caller's unit of work rather than opening a second one — and
+writes the decision. A count marked reconciled with no movement behind it is a
+stock change the shop believes happened and did not; a movement whose count
+still reads unresolved is a stock change nobody can explain.
+
+_Concurrency:_ two people accepting one discrepancy contend on the count row's
+`FOR UPDATE` lock. One settles it; the other finds it settled and is refused —
+except when it is the _same command_ retried, which is answered with the count
+it already produced.
+
+_Verified by:_ `backend/tests/integration/inventoryCounts.test.ts`,
+`inventoryCountConcurrency.test.ts` (double reconciliation, and a forced failure
+between the movement and the settlement), `inventoryCountHistory.test.ts`, and
+`countLinesMigration.test.ts`.
+
+_Not stored, and stated so it is not assumed:_ the product name, the brand, the
+location name, and the counter's display name on a count read are **current
+labels** resolved from the tables that own them today, not snapshots of what
+anything was called on the day it was counted. The permanent facts are the ids,
+the three quantities, the timestamps, the decision, and the movement
+relationship.
 
 ## INV-10 — Quantities are integers in whole base units
 
@@ -188,10 +289,15 @@ physically left; `ADJUSTMENT_REASONS` (`DATA_ENTRY_ERROR`, `MISSED_MOVEMENT`,
 `OTHER`) say why the recorded quantity was wrong. `SOLD` is therefore never an
 adjustment reason: a sale nobody recorded is a `MISSED_MOVEMENT`, and a shop
 that could not tell those apart could not tell trade from bookkeeping.
-`OTHER` requires a note on an adjustment, because it is the one reason that says
-nothing on its own. Neither vocabulary is in the database: both live in
-`@ekon/shared` so they can grow without a migration, and the column is bounded
-text (0005).
+A **count reconciliation** has a third vocabulary again
+(`COUNT_RECONCILIATION_REASONS`), because it answers a third question: not what
+happened to the stock and not why the number was wrong, but why the shop
+accepted that the shelf and the record differ. `OTHER` requires a note in both
+the adjustment and the reconciliation vocabularies, because it is the one reason
+that says nothing on its own. The removal and adjustment vocabularies live only
+in `@ekon/shared` so they can grow without a migration; the reconciliation one
+is additionally a CHECK on `inventory_count_lines` (0013), because that column
+is the stored record of a decision that moved stock.
 
 `occurred_at` is business time — when the stock physically moved — and is stated
 by the caller. `recorded_at` is server time — when the posting engine recorded
@@ -210,9 +316,10 @@ about stock. Request metadata belongs in audit and security logging. See ADR 9,
 which supersedes that part of ADR 6.
 
 _Enforcement:_ `NOT NULL` constraints plus
-`CHECK (movement_type NOT IN ('ISSUE','ADJUSTMENT_IN','ADJUSTMENT_OUT') OR reason_code IS NOT NULL)`
+`CHECK (movement_type NOT IN ('ISSUE','ADJUSTMENT_IN','ADJUSTMENT_OUT','COUNT_RECONCILIATION') OR reason_code IS NOT NULL)`
 — `inventory_movements_reason_required` (0008, replacing 0005's adjustment-only
-constraint of the same shape). The list mirrors
+constraint of the same shape; 0013 adds `COUNT_RECONCILIATION`). The list
+mirrors
 `REASON_REQUIRED_MOVEMENT_TYPES` in `@ekon/shared`, and an integration test
 compares the two. `user_id` is `NOT NULL` but carries no foreign key until
 identity exists; a key pointing at a placeholder actor would be worse than

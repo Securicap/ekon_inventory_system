@@ -10,11 +10,8 @@ import { withTransaction } from '../../platform/db/unitOfWork.js';
 import { AppError, conflict } from '../../platform/http/errors.js';
 import { newId } from '../../platform/ids/uuidv7.js';
 import {
-  claimOperation,
-  completeOperation,
   findReversalOf,
   getMovementById,
-  getOperation,
   insertMovement,
   insertReversal,
   insertZeroBalance,
@@ -25,6 +22,13 @@ import {
   type LockedBalance,
   type PostedMovement,
 } from './infrastructure/ledgerRepository.js';
+import {
+  assertOperationMatchesClaim,
+  claimOperation,
+  completeOperation,
+  getOperation,
+  type OperationClaim,
+} from './infrastructure/operationRepository.js';
 
 /**
  * The posting engine: the one trusted path that puts a movement in the ledger.
@@ -146,19 +150,14 @@ export interface LedgerServiceDeps {
 }
 
 /**
- * How a caller names a command it may have sent before: the operation id, and
- * the two things the engine compares against the stored claim.
+ * How a caller names a command it may have sent before.
  *
- * The same three fields `PostMovementCommand` carries, and deliberately typed
- * as their own shape rather than a `Pick<>` of it — a workflow asks this
- * question *before* it has decided anything else about the command, and often
- * before it has read the database at all.
+ * Defined with the `operations` table it is compared against, and re-exported
+ * here because every workflow that reaches the ledger names its command this
+ * way. Physical counts claim operations without posting a movement, which is
+ * why the type belongs beside the mechanism rather than beside the engine.
  */
-export interface OperationClaim {
-  operationId: string;
-  operationType: string;
-  requestHash: string;
-}
+export type { OperationClaim };
 
 /**
  * One reversal command: which movement was wrong, and who says so.
@@ -194,7 +193,45 @@ export interface PostReversalCommand {
 }
 
 export interface LedgerService {
+  /**
+   * Posts one movement in a transaction of the engine's own.
+   *
+   * What every workflow whose whole command *is* the movement uses: receiving,
+   * removal, and adjustment each describe a business event and have nothing
+   * else to write.
+   */
   postMovement(command: PostMovementCommand): Promise<PostedMovement>;
+  /**
+   * The same posting, in a transaction the **caller** already opened.
+   *
+   * It exists for exactly one situation, and the situation is real: reconciling
+   * a physical count has to write two things — the movement, and the count
+   * record that says the discrepancy was accepted — and they have to commit
+   * together or not at all. A count marked reconciled with no movement behind
+   * it is a stock change the shop believes happened and did not; a movement
+   * whose count still reads unresolved is a stock change nobody can explain.
+   *
+   * The alternatives were both worse. Calling `postMovement` from inside
+   * another transaction would open a second one and commit half the workflow —
+   * INV-5 broken by the code that most depends on it. Reimplementing the claim,
+   * the lock, the chain, the floor and the projection update inside the count
+   * service would be a second ledger, and the second one is the one that gets
+   * the stock floor wrong.
+   *
+   * **This is the same code path**, not a variant of it: `postMovement` is a
+   * `withTransaction` wrapper around this function, so there is one posting
+   * algorithm and one place any of it can be changed.
+   *
+   * The caller must already be inside `withTransaction`. The signature says so
+   * as loudly as a type can — `DatabaseClient` is a transaction client and the
+   * pool is not one — and a caller that passes a client without a transaction
+   * open would leak a claim and a movement as separate autocommits, which is
+   * the thing this whole file exists to prevent.
+   */
+  postMovementInTransaction(
+    tx: DatabaseClient,
+    command: PostMovementCommand,
+  ): Promise<PostedMovement>;
   /**
    * Appends a `REVERSAL` compensating one earlier movement, atomically.
    *
@@ -272,12 +309,26 @@ const REQUIRED_DELTA_SIGN: Readonly<Record<PostableMovementType, 'positive' | 'n
 export function createLedgerService(deps: LedgerServiceDeps): LedgerService {
   const generateId = deps.generateId ?? newId;
 
+  /**
+   * The posting engine's own transaction, wrapped around the step below.
+   *
+   * Two lines, and deliberately: every rule about how a movement is written
+   * lives in `postMovementInTransaction`, so a workflow that supplies its own
+   * transaction gets the identical algorithm rather than a second copy of it.
+   */
   async function postMovement(command: PostMovementCommand): Promise<PostedMovement> {
+    return withTransaction(deps.pool, (tx) => postMovementInTransaction(tx, command));
+  }
+
+  async function postMovementInTransaction(
+    tx: DatabaseClient,
+    command: PostMovementCommand,
+  ): Promise<PostedMovement> {
     // Everything that can be judged without reading the database is judged
-    // first, so a malformed command never opens a transaction.
+    // first, so a malformed command never reaches a statement.
     validateCommand(command);
 
-    return withTransaction(deps.pool, async (tx) => {
+    {
       // One reading of the server clock stamps everything this transaction
       // writes: the operation, the movement, and the balance. Sampled here
       // because the operation row needs it at the moment of the claim, which is
@@ -351,10 +402,14 @@ export function createLedgerService(deps: LedgerServiceDeps): LedgerService {
         updatedAt: recordedAt,
       });
 
-      await completeOperation(tx, { id: command.operationId, movementId: movement.id });
+      await completeOperation(tx, {
+        id: command.operationId,
+        resultResourceType: MOVEMENT_RESULT_RESOURCE_TYPE,
+        resultResourceId: movement.id,
+      });
 
       return movement;
-    });
+    }
   }
 
   /**
@@ -478,7 +533,11 @@ export function createLedgerService(deps: LedgerServiceDeps): LedgerService {
         updatedAt: recordedAt,
       });
 
-      await completeOperation(tx, { id: command.operationId, movementId: movement.id });
+      await completeOperation(tx, {
+        id: command.operationId,
+        resultResourceType: MOVEMENT_RESULT_RESOURCE_TYPE,
+        resultResourceId: movement.id,
+      });
 
       return movement;
     });
@@ -496,7 +555,7 @@ export function createLedgerService(deps: LedgerServiceDeps): LedgerService {
     return found.state === 'completed' ? found.movement : null;
   }
 
-  return { postMovement, postReversal, findCompletedMovement };
+  return { postMovement, postMovementInTransaction, postReversal, findCompletedMovement };
 }
 
 /** What the engine knows about an operation id right now. */
@@ -523,19 +582,10 @@ async function lookUpOperation(db: Queryable, claim: OperationClaim): Promise<Op
   const existing = await getOperation(db, claim.operationId);
   if (!existing) return { state: 'unknown' };
 
-  if (existing.operationType !== claim.operationType) {
-    throw replayedWithDifferentRequest(
-      claim.operationId,
-      `operation type ${existing.operationType} does not match ${claim.operationType}`,
-    );
-  }
-
-  if (existing.requestHash !== claim.requestHash) {
-    throw replayedWithDifferentRequest(
-      claim.operationId,
-      'request hash does not match the original request',
-    );
-  }
+  // One operation id used for two different commands, refused in the one place
+  // that comparison lives — counts make the same comparison about a command
+  // that produces no movement at all.
+  assertOperationMatchesClaim(existing, claim);
 
   if (
     existing.resultResourceType !== MOVEMENT_RESULT_RESOURCE_TYPE ||
@@ -662,13 +712,6 @@ function alreadyReversed(originalId: string, reversalId: string | null): AppErro
     `Movement ${originalId} has already been reversed` +
       (reversalId ? ` by movement ${reversalId}` : '') +
       '. A movement is reversed once; post a new movement if the stock changed again.',
-  );
-}
-
-function replayedWithDifferentRequest(operationId: string, detail: string): AppError {
-  return new AppError(
-    'OPERATION_REPLAYED_WITH_DIFFERENT_BODY',
-    `Operation ${operationId} was already used for a different request: ${detail}`,
   );
 }
 

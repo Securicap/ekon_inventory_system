@@ -154,6 +154,7 @@ function toRecord(
     operationId: entry.operationId,
     reversesMovementId: entry.reversesMovementId,
     reversedByMovementId: entry.reversedByMovementId,
+    countId: entry.countId,
     variant: variant
       ? {
           id: variant.id,

@@ -3,18 +3,23 @@ import type { DatabaseClient, DatabasePool } from '../../../platform/db/pool.js'
 import { AppError } from '../../../platform/http/errors.js';
 
 /**
- * Ledger persistence: the `operations`, `inventory_movements`, and
- * `inventory_balances` tables. Hand-written SQL, typed row shapes kept internal
- * to the backend, and mapping done in one place.
+ * Ledger persistence: the `inventory_movements` and `inventory_balances`
+ * tables. Hand-written SQL, typed row shapes kept internal to the backend, and
+ * mapping done in one place.
+ *
+ * The `operations` table moved to `operationRepository.ts` when physical counts
+ * became the second thing that claims one. Idempotency was never a ledger
+ * concern — it is a property of a *command*, and a count observation is a
+ * command that posts no movement at all.
  *
  * **Every write here takes a transaction client, never the pool.** That is not
  * an accident of the current call site: a movement insert, its balance update,
  * and its operation row have to commit together or not at all (INV-5), so there
  * is deliberately no pool-level variant to reach for.
  *
- * The two single-row *reads* used to answer a replay accept either, because
- * they are read-only, take no lock, and are correct at whichever isolation the
- * caller is already in — inside the posting transaction they must run on that
+ * The single-row *read* used to answer a replay accepts either, because it is
+ * read-only, takes no lock, and is correct at whichever isolation the caller is
+ * already in — inside the posting transaction it must run on that
  * transaction's client, and the pre-transaction replay lookup has no
  * transaction to run in. No write is widened this way, and none should be.
  *
@@ -28,15 +33,6 @@ type Queryable = DatabasePool | DatabaseClient;
 
 /** Marks an `operations` row whose result is an inventory movement. */
 export const MOVEMENT_RESULT_RESOURCE_TYPE = 'inventory_movement';
-
-/** An `operations` row as this module needs to read it back on a replay. */
-export interface StoredOperation {
-  id: string;
-  operationType: string;
-  requestHash: string;
-  resultResourceType: string | null;
-  resultResourceId: string | null;
-}
 
 /**
  * A persisted movement, as the rest of the backend sees it.
@@ -69,14 +65,6 @@ export interface LockedBalance {
   lastMovementId: string | null;
 }
 
-interface OperationRow {
-  id: string;
-  operation_type: string;
-  request_hash: string;
-  result_resource_type: string | null;
-  result_resource_id: string | null;
-}
-
 interface MovementRow {
   id: string;
   variant_id: string;
@@ -98,13 +86,6 @@ interface MovementRow {
 interface BalanceRow {
   quantity_on_hand: number;
   last_movement_id: string | null;
-}
-
-export interface ClaimOperationParams {
-  id: string;
-  operationType: string;
-  requestHash: string;
-  createdAt: Date;
 }
 
 export interface InsertMovementParams {
@@ -167,74 +148,6 @@ export interface UpdateBalanceParams {
   quantityOnHand: number;
   lastMovementId: string;
   updatedAt: Date;
-}
-
-/**
- * Claims the operation id. Returns true when this transaction owns the command,
- * false when it was already claimed — including by a concurrent transaction,
- * which `ON CONFLICT DO NOTHING` waits out before reporting the conflict.
- *
- * Insert-and-see, never check-then-insert: reading first and inserting after
- * leaves a window in which two transactions both believe they are the first,
- * and duplicate protection that races is not duplicate protection (INV-7).
- */
-export async function claimOperation(
-  tx: DatabaseClient,
-  params: ClaimOperationParams,
-): Promise<boolean> {
-  const { rows } = await tx.query<{ id: string }>(
-    `INSERT INTO operations (id, operation_type, request_hash, created_at)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (id) DO NOTHING
-     RETURNING id`,
-    [params.id, params.operationType, params.requestHash, params.createdAt],
-  );
-  return rows.length === 1;
-}
-
-export async function getOperation(db: Queryable, id: string): Promise<StoredOperation | null> {
-  const { rows } = await db.query<OperationRow>(
-    `SELECT id, operation_type, request_hash, result_resource_type, result_resource_id
-       FROM operations
-      WHERE id = $1`,
-    [id],
-  );
-  const row = rows[0];
-  return row
-    ? {
-        id: row.id,
-        operationType: row.operation_type,
-        requestHash: row.request_hash,
-        resultResourceType: row.result_resource_type,
-        resultResourceId: row.result_resource_id,
-      }
-    : null;
-}
-
-/**
- * Records which movement this operation produced, so a retry can return it
- * instead of posting again. The pointer only: never the request or the response
- * body, which would turn an idempotency key into a payload store.
- */
-export async function completeOperation(
-  tx: DatabaseClient,
-  params: { id: string; movementId: string },
-): Promise<void> {
-  const result = await tx.query(
-    `UPDATE operations
-        SET result_resource_type = $2,
-            result_resource_id   = $3
-      WHERE id = $1`,
-    [params.id, MOVEMENT_RESULT_RESOURCE_TYPE, params.movementId],
-  );
-  // This transaction claimed the operation a few statements ago, so exactly one
-  // row must be here to stamp. Anything else means the row was never claimed or
-  // no longer exists, and a movement whose operation records no result would be
-  // re-posted by the next retry.
-  assertUpdatedExactlyOneRow(
-    result.rowCount,
-    `operation ${params.id} while recording its movement result`,
-  );
 }
 
 /**
@@ -497,10 +410,10 @@ export async function getMovementById(db: Queryable, id: string): Promise<Posted
 }
 
 /**
- * Guards an UPDATE that must touch exactly one row. Both callers below update a
- * row this transaction has already located, so any other count is a broken
- * assumption rather than an ordinary failure: it throws, the unit of work rolls
- * back, and nothing half-written commits.
+ * Guards an UPDATE that must touch exactly one row. Its caller updates a row
+ * this transaction has already located and locked, so any other count is a
+ * broken assumption rather than an ordinary failure: it throws, the unit of
+ * work rolls back, and nothing half-written commits.
  */
 function assertUpdatedExactlyOneRow(rowCount: number | null, what: string): void {
   if (rowCount === 1) return;

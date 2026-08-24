@@ -49,6 +49,15 @@ export interface LedgerEntry {
    * which is what makes a single left join the whole answer (INV-2).
    */
   reversedByMovementId: string | null;
+  /**
+   * The physical count this movement reconciled, if it is one.
+   *
+   * Read back through `inventory_count_lines.reconciliation_movement_id`, which
+   * is unique — so, like the field above, this is one stored relationship
+   * followed the other way rather than a second column on the ledger. The
+   * ledger carries nothing about counts at all.
+   */
+  countId: string | null;
   userId: string;
   occurredAt: Date;
   recordedAt: Date;
@@ -92,6 +101,7 @@ interface MovementHistoryRow {
   operation_id: string;
   reverses_movement_id: string | null;
   reversed_by_movement_id: string | null;
+  count_id: string | null;
   user_id: string;
   occurred_at: Date;
   recorded_at: Date;
@@ -164,22 +174,25 @@ export async function listMovementHistory(
 
   const where = conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`;
 
-  // The left join answers "was this movement reversed?" for the whole page in
-  // the page's own query. It is not an N+1 and cannot become one: there is no
-  // per-row lookup, and `UNIQUE (reverses_movement_id)` (0005) means the join
-  // matches at most one row per movement, so it can neither multiply the page
-  // nor need a DISTINCT. That unique constraint is also the index the join
-  // probes, which is why a page costs the same as it did before the column
-  // existed.
+  // Two left joins, answering "was this movement reversed?" and "which count
+  // did it reconcile?" for the whole page in the page's own query. Neither is
+  // an N+1 and neither can become one: there is no per-row lookup, and both
+  // `UNIQUE (reverses_movement_id)` (0005) and
+  // `UNIQUE (reconciliation_movement_id)` (0013) mean each join matches at most
+  // one row per movement — so they can neither multiply the page nor need a
+  // DISTINCT. Those unique constraints are also the indexes the joins probe,
+  // which is why a page costs what it did before either column existed.
   const { rows } = await db.query<MovementHistoryRow>(
     `SELECT m.id, m.variant_id, m.location_id, m.movement_type,
             m.quantity_delta, m.quantity_before, m.quantity_after,
             m.reason_code, m.note, m.operation_id, m.reverses_movement_id,
             r.id AS reversed_by_movement_id,
+            c.id AS count_id,
             m.user_id, m.occurred_at, m.recorded_at,
             m.recorded_at::text AS recorded_at_exact
        FROM inventory_movements m
        LEFT JOIN inventory_movements r ON r.reverses_movement_id = m.id
+       LEFT JOIN inventory_count_lines c ON c.reconciliation_movement_id = m.id
       ${where}
       ORDER BY m.recorded_at DESC, m.id DESC
       LIMIT ${bind(filter.limit)}`,
@@ -203,6 +216,7 @@ function toEntry(row: MovementHistoryRow): LedgerEntry {
     operationId: row.operation_id,
     reversesMovementId: row.reverses_movement_id,
     reversedByMovementId: row.reversed_by_movement_id,
+    countId: row.count_id,
     userId: row.user_id,
     occurredAt: row.occurred_at,
     recordedAt: row.recorded_at,
