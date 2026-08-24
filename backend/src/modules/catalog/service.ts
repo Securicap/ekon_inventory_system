@@ -120,6 +120,28 @@ export interface CatalogService {
     variantId: string,
   ): Promise<MerchandiseEligibility | null>;
   /**
+   * May it be **physically counted**?
+   *
+   * `ACTIVE` and `DISCONTINUED` both pass. Discontinued stock is real stock
+   * sitting on a real shelf, and a stocktake that skipped it would be counting
+   * some of the shop's inventory and calling it all of it — which is worse than
+   * not counting at all, because the gap looks like agreement.
+   *
+   * `ARCHIVED` does not. Archiving asserts the merchandise holds nothing
+   * anywhere, so there is nothing to count; and a count that found something
+   * would be evidence the archive was wrong, which is a lifecycle problem to
+   * fix rather than a variance to reconcile. Restoring it to `DISCONTINUED`
+   * first makes both the count and any correction possible.
+   *
+   * A separate method from `findVariantForIssue` even though the two currently
+   * answer alike, because they are different questions and the day they diverge
+   * the caller that asked the wrong one would be silently wrong.
+   */
+  findVariantForCounting(
+    tx: DatabaseClient,
+    variantId: string,
+  ): Promise<MerchandiseEligibility | null>;
+  /**
    * May its recorded history be **corrected** — adjusted, or a movement
    * reversed?
    *
@@ -448,6 +470,8 @@ export function createCatalogService(deps: CatalogServiceDeps): CatalogService {
       variantEligibility(tx, variantId, (policy) => policy.mayIssue),
     findVariantForCorrection: (tx, variantId) =>
       variantEligibility(tx, variantId, (policy) => policy.mayCorrect),
+    findVariantForCounting: (tx, variantId) =>
+      variantEligibility(tx, variantId, (policy) => policy.mayCount),
     listOperationalVariants: () => listOperationalVariants(pool),
     findVariantLabels: (variantIds) => findVariantLabels(pool, variantIds),
   };

@@ -132,3 +132,39 @@ export async function findVariantsHoldingStock(
     quantityOnHand: row.quantity_on_hand,
   }));
 }
+
+/**
+ * The quantity one shelf holds, **locked** for the rest of the transaction.
+ *
+ * This is the expected quantity a physical count is measured against, and the
+ * lock is what makes it a coherent snapshot rather than a number that was true
+ * a moment ago. `FOR SHARE` and not `FOR UPDATE`: the count writes no balance,
+ * so it needs only to stop the quantity changing under it — a concurrent
+ * posting takes `FOR UPDATE` on the same row and waits, and another count
+ * reading the same shelf does not.
+ *
+ * The lock lives for the milliseconds the recording transaction takes and not
+ * one moment longer. It emphatically does **not** freeze the shelf for the
+ * duration of an investigation: sales and receipts continue against a counted
+ * shelf, which is why reconciliation later applies the observed *difference* to
+ * whatever the balance has become rather than setting it to what was counted.
+ *
+ * **An absent row is zero, and stays absent.** A shelf that has never held
+ * stock has no balance row, and a read has no business creating one — the count
+ * records an expectation of zero, and only a reconciliation that actually moves
+ * stock brings the row into existence.
+ */
+export async function lockShelfQuantity(
+  tx: DatabaseClient,
+  variantId: string,
+  locationId: string,
+): Promise<number> {
+  const { rows } = await tx.query<{ quantity_on_hand: number }>(
+    `SELECT quantity_on_hand
+       FROM inventory_balances
+      WHERE variant_id = $1 AND location_id = $2
+        FOR SHARE`,
+    [variantId, locationId],
+  );
+  return rows[0]?.quantity_on_hand ?? 0;
+}

@@ -1,13 +1,18 @@
 import type { FastifyInstance } from 'fastify';
 import {
   adjustStockRequestSchema,
+  countPathParamsSchema,
+  countQuerySchema,
   movementHistoryQuerySchema,
   receiveStockRequestSchema,
+  recordCountRequestSchema,
+  reconcileCountRequestSchema,
   removeStockRequestSchema,
   reverseMovementRequestSchema,
 } from '@ekon/shared';
 import { requireActor } from '../identity/index.js';
 import type { AdjustmentService } from './adjustmentService.js';
+import type { CountService } from './countService.js';
 import type { MovementHistoryService } from './movementHistoryService.js';
 import type { ReceivingService } from './receivingService.js';
 import type { RemovalService } from './removalService.js';
@@ -17,7 +22,8 @@ import type { InventoryService } from './service.js';
 /**
  * Inventory HTTP surface: reading locations, reading current stock, booking in
  * stock that arrived, recording stock that left, correcting a quantity that was
- * wrong, and reversing a movement that should never have been posted.
+ * wrong, reversing a movement that should never have been posted, and recording
+ * what somebody physically counted on a shelf.
  *
  * Each route declares the capability it needs, and the identity module's
  * enforcement hook resolves the session and checks that capability before the
@@ -57,6 +63,7 @@ export function registerInventoryRoutes(
     removal: RemovalService;
     adjustment: AdjustmentService;
     reversal: ReversalService;
+    counts: CountService;
   },
 ): void {
   app.get(
@@ -209,6 +216,103 @@ export function registerInventoryRoutes(
         actorId: actor.id,
       });
       return reply.status(201).send(result);
+    },
+  );
+
+  /**
+   * Records what somebody physically counted: one variant, at one location, at
+   * one business time.
+   *
+   * **It changes no stock.** Not the balance, not the ledger, not a thing —
+   * which is the whole reason this endpoint exists rather than a call to
+   * adjustment. Counting six where Ekon expected seven records a discrepancy of
+   * −1 and leaves the shelf reading seven, because the one unmatched unit is
+   * evidence and overwriting it would be destroying the only signal the shop
+   * had.
+   *
+   * The caller states only what was seen. `expectedQuantity` is read from the
+   * balance projection inside the recording transaction and refused from the
+   * wire, along with `variance` and `status`, which the database derives.
+   *
+   * Requires **`inventory.count`**, which the default seed withholds from
+   * `EMPLOYEE`. Counting is an audit of the records themselves, and a shop
+   * decides deliberately who performs one.
+   *
+   * `201`, and `201` again on a retry: the command created an observation, and
+   * a replay is answered with that same observation rather than a second one.
+   */
+  app.post(
+    '/api/inventory/counts',
+    { config: { capability: 'inventory.count' } },
+    async (request, reply) => {
+      const actor = requireActor(request);
+      const input = recordCountRequestSchema.parse(request.body);
+      const result = await services.counts.recordCount({ request: input, actorId: actor.id });
+      return reply.status(201).send(result);
+    },
+  );
+
+  /**
+   * What has been counted, and what is still unexplained.
+   *
+   * **`inventory.read`**, the same capability that answers what is on the shelf
+   * and how it got there. A discrepancy is inventory visibility: somebody who
+   * may see the numbers may see where they are disputed, and inventing a
+   * capability for it would mean granting one to everybody who already has the
+   * other. Acting on a discrepancy is what needs `inventory.count`.
+   *
+   * `?status=OPEN` is the discrepancy list — the question the workflow exists
+   * for. The query is parsed with the shared schema exactly as a body is, and
+   * it is `.strict()`, so a mistyped filter is refused rather than dropped.
+   *
+   * A `GET` and nothing but: no transaction, no lock, no clock, and no count or
+   * balance row brought into existence to answer a read.
+   */
+  app.get(
+    '/api/inventory/counts',
+    { config: { capability: 'inventory.read' } },
+    async (request, reply) => {
+      const query = countQuerySchema.parse(request.query);
+      const page = await services.counts.listCounts(query);
+      return reply.status(200).send(page);
+    },
+  );
+
+  /**
+   * Accepts a discrepancy, and posts the one movement that carries it.
+   *
+   * Requires **`inventory.count`** and deliberately not `inventory.adjust`. A
+   * reconciliation is its own movement semantics — it is the shop accepting a
+   * physically observed difference, with the count as evidence — and routing it
+   * through the adjustment capability would say the two are the same authority.
+   * They are not: an adjustment needs no observation behind it.
+   *
+   * The body carries a decision and nothing else. The variant, the location,
+   * and a delta of `counted - expected` all come from the persisted count, so
+   * none of them is a request field.
+   *
+   * `200` rather than `201`: the resource this addresses is the count, it
+   * already existed, and the response is that count settled. The movement it
+   * posted is named inside `reconciliation.movementId`.
+   *
+   * Refusals: `404` for a count that does not exist, `409` for one already
+   * settled — including a matched count, which has no discrepancy to accept —
+   * `409` for an operation id reused with a different decision, and `422`
+   * `INSUFFICIENT_STOCK` when the shelf can no longer absorb the variance.
+   */
+  app.post(
+    '/api/inventory/counts/:countId/reconcile',
+    { config: { capability: 'inventory.count' } },
+    async (request, reply) => {
+      const actor = requireActor(request);
+      const { countId } = countPathParamsSchema.parse(request.params);
+      const input = reconcileCountRequestSchema.parse(request.body);
+      const result = await services.counts.reconcileCount({
+        countId,
+        request: input,
+        actorId: actor.id,
+      });
+      return reply.status(200).send(result);
     },
   );
 

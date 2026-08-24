@@ -4,6 +4,7 @@ import type { DatabasePool } from '../../platform/db/pool.js';
 import type { CatalogService } from '../catalog/index.js';
 import type { IdentityUserService } from '../identity/index.js';
 import { createAdjustmentService, type AdjustmentService } from './adjustmentService.js';
+import { createCountService, type CountService } from './countService.js';
 import { createLedgerService, type LedgerService } from './ledgerService.js';
 import {
   createMovementHistoryService,
@@ -21,9 +22,15 @@ import { createInventoryService, type InventoryService } from './service.js';
  * internals.
  *
  * The posting engine is built here and still has **no HTTP surface of its
- * own** — no route, no request schema, no handler. Four workflows call it, and
+ * own** — no route, no request schema, no handler. Five workflows call it, and
  * each calls it the same way: describe the business event, let the engine own
- * the movement. Physical counts are PR 6 and are the fifth.
+ * the movement.
+ *
+ * The count service is the one that calls it differently, and deliberately: a
+ * reconciliation has to write the movement *and* settle the count in one
+ * transaction, so it joins the engine to its own unit of work through
+ * `postMovementInTransaction` rather than letting the engine open a second one.
+ * That is the same posting algorithm, not a copy of it.
  *
  * The catalog service is a dependency rather than a set of tables: variants
  * belong to the catalog module, so each workflow asks it the question named
@@ -53,6 +60,7 @@ export function registerInventory(
   removal: RemovalService;
   adjustment: AdjustmentService;
   reversal: ReversalService;
+  counts: CountService;
 } {
   const inventory = createInventoryService({ pool: deps.pool, catalog: deps.catalog });
   const history = createMovementHistoryService({
@@ -65,6 +73,13 @@ export function registerInventory(
   const removal = createRemovalService({ pool: deps.pool, ledger, catalog: deps.catalog });
   const adjustment = createAdjustmentService({ pool: deps.pool, ledger, catalog: deps.catalog });
   const reversal = createReversalService({ ledger, catalog: deps.catalog });
+  const counts = createCountService({
+    pool: deps.pool,
+    clock: deps.clock,
+    ledger,
+    catalog: deps.catalog,
+    identity: deps.identity,
+  });
 
   registerInventoryRoutes(app, {
     inventory,
@@ -73,9 +88,10 @@ export function registerInventory(
     removal,
     adjustment,
     reversal,
+    counts,
   });
 
-  return { inventory, history, ledger, receiving, removal, adjustment, reversal };
+  return { inventory, history, ledger, receiving, removal, adjustment, reversal, counts };
 }
 
 export { createInventoryService } from './service.js';
@@ -123,6 +139,14 @@ export type {
   ReverseMovementCommand,
 } from './reversalService.js';
 
+export { createCountService } from './countService.js';
+export type {
+  CountService,
+  CountServiceDeps,
+  RecordCountCommand,
+  ReconcileCountCommand,
+} from './countService.js';
+
 /**
  * Whether merchandise currently holds stock — the inventory module's answer to
  * the one question the catalog's archive check has to ask it.
@@ -148,3 +172,12 @@ export { ADJUSTMENT_OPERATION_TYPE } from './domain/adjustmentRequestHash.js';
 
 /** The `operations.operation_type` a reversal command claims its id under. */
 export { REVERSAL_OPERATION_TYPE } from './domain/reversalRequestHash.js';
+
+/** The `operations.operation_type` a count observation claims its id under. */
+export { COUNT_RECORD_OPERATION_TYPE } from './domain/countRequestHash.js';
+
+/** The `operations.operation_type` a reconciliation claims its id under. */
+export { COUNT_RECONCILE_OPERATION_TYPE } from './domain/countReconciliationRequestHash.js';
+
+/** Marks an `operations` row whose result is a count line rather than a movement. */
+export { COUNT_RESULT_RESOURCE_TYPE } from './infrastructure/countRepository.js';
