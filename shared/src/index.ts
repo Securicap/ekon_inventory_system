@@ -21,4 +21,5 @@ export * from './inventoryBalances.js';
 export * from './receiving.js';
 export * from './adjustment.js';
 export * from './reversal.js';
+export * from './counts.js';
 export * from './removal.js';

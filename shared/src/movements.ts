@@ -34,13 +34,23 @@ export type MovementType = z.infer<typeof movementTypeSchema>;
  * shop that cannot tell them apart cannot tell trade from loss. So the reason
  * is the fact, and the type without it is half a record.
  *
- * `RECEIPT` carries its reason in its type: stock arrived. A count carries it
- * in the count, and a reversal in the movement it reverses.
+ * A **count reconciliation** joins them, and its reason answers a third
+ * question again: not what happened to the stock and not why the number was
+ * wrong, but *why the shop accepted that the shelf and the record differ*. A
+ * variance of −1 accepted as an unrecorded sale and the same −1 accepted as
+ * shrinkage are the same arithmetic and opposite conclusions, and a
+ * reconciliation with no reason at all records that somebody moved stock to
+ * match a count and would not say why — which is the one outcome the count
+ * principle exists to prevent.
+ *
+ * `RECEIPT` carries its reason in its type: stock arrived. A reversal carries
+ * it in the movement it reverses.
  */
 export const REASON_REQUIRED_MOVEMENT_TYPES: readonly MovementType[] = [
   'ISSUE',
   'ADJUSTMENT_IN',
   'ADJUSTMENT_OUT',
+  'COUNT_RECONCILIATION',
 ];
 
 /**

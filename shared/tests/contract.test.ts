@@ -63,18 +63,25 @@ describe('quantity contract', () => {
 });
 
 describe('movement contract', () => {
-  it('requires a reason for issues and adjustments, and for nothing else', () => {
-    // A receipt carries its reason in its type, a count in the count, and a
-    // reversal in the movement it reverses. The other three cannot say what
-    // happened without one.
+  it('requires a reason for everything that cannot say why without one', () => {
+    // A receipt carries its reason in its type and a reversal in the movement
+    // it reverses. The other four cannot say what happened without one — an
+    // issue because "it left" is not yet a fact, an adjustment because the
+    // number changed without the stock moving, and a count reconciliation
+    // because accepting a variance as an unrecorded sale or as shrinkage is
+    // the same arithmetic and opposite conclusions.
     expect([...REASON_REQUIRED_MOVEMENT_TYPES].sort()).toEqual([
       'ADJUSTMENT_IN',
       'ADJUSTMENT_OUT',
+      'COUNT_RECONCILIATION',
       'ISSUE',
     ]);
     for (const type of REASON_REQUIRED_MOVEMENT_TYPES) {
       expect(MOVEMENT_TYPES).toContain(type);
     }
+    // The two that carry it elsewhere are still exempt.
+    expect(REASON_REQUIRED_MOVEMENT_TYPES).not.toContain('RECEIPT');
+    expect(REASON_REQUIRED_MOVEMENT_TYPES).not.toContain('REVERSAL');
   });
 
   it('tells stock that left from stock that was mis-recorded', () => {
