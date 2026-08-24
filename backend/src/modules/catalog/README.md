@@ -152,13 +152,15 @@ without the capability, `401` without a session.
 ## What other modules ask this one
 
 The catalog owns every table listed at the top of this file, and no other module
-may query them — the lint rule enforces the boundary. Four questions cross it,
+may query them — the lint rule enforces the boundary. Five questions cross it,
 all as calls on `CatalogService`, and none of them decides anything about stock:
 
 - `findVariantForReceiving(tx, id)` — may stock be **booked in** against this?
 - `findVariantForIssue(tx, id)` — may stock be **taken off the shelf**?
 - `findVariantForCorrection(tx, id)` — may its recorded history be **corrected**
   (adjusted, or a movement reversed)?
+- `findVariantForCounting(tx, id)` — may it be **physically counted**, and a
+  variance reconciled?
 - `listOperationalVariants()` — every variant still in day-to-day operation,
   with the product name, SKU, and attributes needed to label one. Asked by the
   inventory module to build the current stock view.
@@ -345,8 +347,8 @@ of withdrawn rather than two adjacent ones that get checked in different places.
 `DISCONTINUED` means **no longer bought or reordered, and nothing else**.
 Receiving is refused because replenishing something the business decided to stop
 stocking is the one act the decision was about; everything else stays open. The
-units on the shelf are sold to real customers, counted at stocktake, and shown
-on the stock screen. A system that made discontinued merchandise invisible would
+units on the shelf are sold to real customers, physically counted (PR 6 made
+that column real rather than a promise), and shown on the stock screen. A system that made discontinued merchandise invisible would
 strand it — and stranded stock is sold anyway, off the books, which is worse
 than not discontinuing it at all.
 
