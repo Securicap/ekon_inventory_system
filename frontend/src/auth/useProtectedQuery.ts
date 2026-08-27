@@ -27,13 +27,23 @@ import { useAuth } from './useAuth.js';
 export function useProtectedQuery<TData>(options: {
   queryKey: QueryKey;
   queryFn: (context: { signal: AbortSignal }) => Promise<TData>;
+  /**
+   * A second condition on top of being signed in, for a read that is only
+   * needed once somebody asks for it.
+   *
+   * The catalog's vocabulary is the case it exists for: it is wanted by the
+   * product form and by nothing else, so every visit to Products would
+   * otherwise pay for a read that most of them never use. Being signed in is
+   * still required — this narrows, and can never widen.
+   */
+  enabled?: boolean;
 }): UseQueryResult<TData, Error> {
   const { state, reportSessionEnded } = useAuth();
 
   const result = useQuery({
     queryKey: options.queryKey,
     queryFn: options.queryFn,
-    enabled: state.status === 'authenticated',
+    enabled: state.status === 'authenticated' && options.enabled !== false,
   });
 
   const sessionEnded = result.error instanceof ApiError && result.error.status === 401;

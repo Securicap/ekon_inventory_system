@@ -48,6 +48,8 @@ const RECEIVE = shortcutName(ht['nav.receive'], ht['nav.receivePurpose']);
 const REMOVE = shortcutName(ht['nav.remove'], ht['nav.removePurpose']);
 const PRODUCTS = shortcutName(ht['nav.products'], ht['nav.productsPurpose']);
 const NEW_USER = shortcutName(ht['nav.newUser'], ht['nav.newUserPurpose']);
+const COUNTS = shortcutName(ht['nav.counts'], ht['nav.countsPurpose']);
+const HISTORY = shortcutName(ht['nav.history'], ht['nav.historyPurpose']);
 
 /**
  * Every shortcut's accessible name, in order. Joined the way the accessible
@@ -91,7 +93,7 @@ describe('the home screen', () => {
 
   it('offers every destination this person may open, operations first', async () => {
     await signedInWith(EVERYTHING);
-    expect(shortcuts()).toEqual([STOCK, RECEIVE, REMOVE, PRODUCTS, NEW_USER]);
+    expect(shortcuts()).toEqual([STOCK, RECEIVE, REMOVE, COUNTS, HISTORY, PRODUCTS, NEW_USER]);
   });
 
   it('does not offer itself', async () => {
@@ -103,7 +105,9 @@ describe('the home screen', () => {
   it('leaves out what the capability does not open, rather than disabling it', async () => {
     await signedInWith(['inventory.read', 'inventory.receive']);
 
-    expect(shortcuts()).toEqual([STOCK, RECEIVE]);
+    // Counts and History come with `inventory.read`, which is what makes them
+    // visibility rather than authority.
+    expect(shortcuts()).toEqual([STOCK, RECEIVE, COUNTS, HISTORY]);
     // Absent, not present-and-dead: a disabled door is still a door somebody
     // will try, and the API would refuse it anyway.
     for (const button of within(tasks()).getAllByRole('button')) {

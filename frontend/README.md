@@ -3,11 +3,18 @@
 React + TypeScript, built into `backend/public` and served by the backend from
 the same origin. The browser is a client and holds no authoritative data.
 
-**The current screens are temporary.** The platform's visual design has not been
-done. What is here is plain semantic HTML with enough Tailwind to be usable at a
-shop counter and on a phone: no design system, no component library, no icon
-set, no theme architecture, and no dashboard. It is meant to be replaced whole,
-and it is deliberately small enough that replacing it is cheap.
+**The visual design has not been done.** What is here is plain semantic HTML
+with enough Tailwind to be usable at a shop counter and on a phone: no design
+system, no component library, no icon set, no theme architecture, and no
+dashboard. The _information architecture_, though, is no longer temporary — it
+is the OR1 operating model made visible, and the rest of this file is mostly
+about why it is shaped the way it is.
+
+The shop's whole loop is reachable without a terminal: enter merchandise, book a
+delivery in, read what is on the shelf, record what leaves, walk the shelves and
+record what was found, explain a difference and let the shop's numbers move,
+correct a number that was wrong, undo a movement that should not have been
+posted, and withdraw merchandise the shop no longer sells.
 
 ## Signing in
 
@@ -65,6 +72,31 @@ about it. Both go through `useProtectedQuery`, which is the only join between
 the generic API client and React — `lib/api.ts` knows about HTTP and nothing
 about who is signed in.
 
+## Products and Inventory are not the same thing
+
+This is the distinction the interface exists to make obvious, because it is the
+one that confused people first.
+
+**Products is the catalog: what the shop sells.** A brand, a name, how it is
+classified, the variants it comes in, what each sells for and what each cost.
+There is **no quantity anywhere on it** — not a total, not a location, not a
+"currently 7 in stock" under the price. A product exists whether or not a single
+unit is on a shelf, and it goes on existing after the last one is sold.
+
+**Inventory is the shelf: what the shop physically holds.** A SKU, a quantity, a
+location. It is a projection of the ledger, it changes every time anything
+moves, and it never carries a price — a shelf count is not a valuation, and a
+screen that put the two together would be inviting somebody to multiply them and
+call the answer money.
+
+Everything downstream follows from the split:
+
+- entering merchandise is a catalog act (`catalog.write`) and moves no stock;
+- withdrawing merchandise is a catalog act (`catalog.deactivate`) and moves no
+  stock — archiving is _refused_ while stock remains rather than writing it off;
+- receiving, removal, adjustment, reversal and reconciliation are inventory acts
+  and all of them post to the ledger.
+
 ## Navigation
 
 Visibility is decided by **capability, never by role**. There is no
@@ -85,9 +117,43 @@ called "Users" that cannot list any would be a lie about what is behind it.
 Each inventory door has its own key, and the keys are not interchangeable:
 Stock on **`inventory.read`**, Receiving on **`inventory.receive`**, Removal on
 **`inventory.remove`**. Somebody may hold any combination, and neither write
-door opens on the read capability or on the other's. `inventory.adjust` and
-`inventory.reverse` open nothing here — correcting a balance that was wrong is
-not recording that stock left, both have an API and neither has a screen yet.
+door opens on the read capability or on the other's.
+
+**Counts and History ride on `inventory.read`.** Seeing what has been counted
+and how the numbers got here is inventory _visibility_; recording a count and
+accepting a difference need `inventory.count`, and those are gated on the screen
+rather than at the door. Somebody who may read stock and nothing else opens both
+screens and can change neither.
+
+### Some capabilities open no destination at all
+
+`inventory.adjust`, `inventory.reverse` and `catalog.deactivate` add nothing to
+the navigation, on purpose. **A capability is not a destination.** Each of the
+three is an action _on_ something:
+
+| capability           | where it lives                                   |
+| -------------------- | ------------------------------------------------ |
+| `inventory.adjust`   | the inventory row whose number is wrong          |
+| `inventory.reverse`  | the movement in History that should not be there |
+| `catalog.deactivate` | the product on Products being withdrawn          |
+
+Making any of them a screen would mean asking somebody to arrive at a blank form
+and re-identify the thing they were already looking at — and, worse, would put
+"correct a balance" beside "record a sale" in a list of everyday acts, which is
+exactly the confusion the two capabilities exist to prevent.
+
+### Three groups
+
+The sidebar reads as three short lists rather than one long one, split by what
+somebody came to do:
+
+- **Operations** — Home, Inventory, Receive, Remove: running the shop today.
+- **Control** — Counts, History: checking that today's numbers are right.
+- **Management** — Products, New account: deciding what the shop sells and who
+  may touch it.
+
+A group whose entries are all forbidden does not appear at all, heading
+included.
 
 **A hidden link is not a security boundary.** Capabilities arrive from `/me` and
 live in a browser, where anything can be edited. Every request is checked again
@@ -100,21 +166,36 @@ product created is a product visible one line below the form that made it.
 Reading the catalog and writing it are still two permissions, and somebody
 holding only `catalog.read` — every employee — is shown the list and no form.
 
-## Creating a product
+## Entering merchandise
 
-Until this existed, a fresh installation had nothing to receive. The catalog was
-read-only in the browser, so the shop's first product had to be created with an
-API call typed by hand, and an employee who opened receiving found an empty
-list. It is the first workflow of the operating loop, and the smallest form that
-covers the endpoint that was already there.
+**A product, its brand, how it is classified, and one or more variants.** Each
+variant carries its attributes, what it sells for, what it cost, and any barcode
+somebody else printed on it. A variant with no attributes is the default
+variant, which is the ordinary case for something sold one way, and is what
+"type a name and press create" still produces — every field beyond the name is
+optional, because a shop that does not know a price yet must not be blocked from
+entering the item.
 
-**One product, one or more variants, and nothing else.** A name, an optional
-description, and for each variant any number of attribute name/value pairs — a
-variant with none is the default variant, which is the ordinary case for
-something sold one way, and is what "type a name and press create" produces.
-There is no editing, no deactivation, no price, no cost, no supplier, and no
-category: each is a separate decision about what the catalog _is_, and none of
-them is needed to receive a sack of rice.
+**Attribute names are a list, never a text box.** `color` is the shape variant
+identity takes across the whole catalog — it is baked into the variant
+signature — so the server refuses a name it has never heard of. A form that
+invited somebody to type one would be a form that invites a rejection they had
+no way to predict, and a shop that got past it would end up with `color`,
+`colour` and `couleur` describing the same thing. The vocabulary comes from
+`GET /api/catalog/metadata`; the _value_ stays free text, because `Black` is
+display data about one variant.
+
+**Money is entered as money and converted at the edge.** `7,500.00`, not
+`750000`. The conversion in `lib/money.ts` reads the digits as _text_ and pads
+them — there is no floating-point arithmetic anywhere in the parse, because
+`7500.55 * 100` is `750054.99999999999` in JavaScript and `Math.round` would
+paper over that for most inputs and lose a centime for some. The currency is
+chosen per amount rather than assumed: this shop buys in one currency and sells
+in another routinely, there is no configured default anywhere in the system, and
+a form with a hard-coded `HTG` would be quietly wrong about half the
+merchandise. An amount with no currency, or a currency with no amount, is
+refused; an empty price is **omitted** rather than sent as zero, because `null`
+means nobody has established one and zero would mean the item is free.
 
 **Nothing the server owns has an input**, and none could be sent if it had one.
 The request goes through the shared `.strict()` `createProductRequestSchema`
@@ -210,14 +291,16 @@ the moment the server answers `201`, and tidying a cache must never turn a
 booked delivery into "did that work?". A replay of an earlier receipt answers
 `201` too and invalidates identically. A refusal and a dropped connection
 invalidate nothing: nothing is known to have moved. **The visual design is still
-temporary**, like every other screen here.
+ahead of us**, like every other screen here.
 
 ## Current stock
 
-The Stock destination answers the question the counter asks all day: **what do
-we have, and where is it?** It is gated on **`inventory.read`**, and it is the
-screen the old location list became — locations are not a destination of their
-own, because their names arrive inside the stock answer.
+The Inventory destination answers the question the counter asks all day: **what
+do we have, and where is it?** It is gated on **`inventory.read`**, and it is
+the screen the old location list became — locations are not a destination of
+their own, because their names arrive inside the stock answer. It carries no
+price and no cost: a shelf count is not a valuation, and see _Products and
+Inventory are not the same thing_ above.
 
 ```
 src/screens/InventoryScreen.tsx   the cards, the search, the refresh, the empty states
@@ -267,12 +350,32 @@ moved; it re-reads the balances alone, keeps what was typed in the search field,
 leaves the numbers on screen while the new ones are on their way, and is
 disabled while a read is in flight so it cannot be started twice.
 
-**Nothing here changes anything.** No adjust, no removal, no count, no history,
-and the cards are not clickable — a card that looked like a control would be
-promising one that does not exist yet. Deliberately absent from the rows, too:
-the variant, product, and location ids, and `updatedAt`. That last one says when
-a projection moved, not when anybody counted, and a screen that showed it as a
-business fact would invite somebody to trust it as one.
+**The rows now lead somewhere, and only where a capability allows.** Three
+actions at most, each on its own key, each absent rather than disabled when it
+is not held:
+
+| action  | capability         | what it does                                    |
+| ------- | ------------------ | ----------------------------------------------- |
+| History | `inventory.read`   | opens History already filtered to this SKU      |
+| Count   | `inventory.count`  | opens the count form with item and shelf chosen |
+| Correct | `inventory.adjust` | opens the adjust dialog on this row             |
+
+**Receive and Remove are deliberately not among them** even though they would
+fit. Both have their own destination, both are everyday work with their own form
+and their own outcome, and duplicating them onto every row would give one act
+two front doors that behave differently. What a row shortcut is good for is the
+thing that is _awkward_ from a destination: opening history already narrowed to
+this SKU, or counting the shelf you are looking at.
+
+A greyed-out button is a door with a lock on it; this application does not show
+those. A variant held at no active location offers History and nothing else,
+because a count and a correction are both per (item, shelf) and there is no
+shelf for them to be about.
+
+Still deliberately absent from the rows: the variant, product, and location ids,
+and `updatedAt`. That last one says when a projection moved, not when anybody
+counted, and a screen that showed it as a business fact would invite somebody to
+trust it as one.
 
 ## Removal
 
@@ -370,7 +473,213 @@ invalidates identically. Nothing else invalidates: not a `400`, `403`, `404`,
 
 **Nothing is written to browser storage**, and nothing is optimistically
 changed. Only the server's answer proves the stock moved. **The visual design is
-still temporary**, like every other screen here.
+still ahead of us**, like every other screen here.
+
+## Physical counts
+
+> **A count observes. Investigation explains. Reconciliation changes stock.**
+
+The Counts screen is built around that sentence, and it is worth saying how,
+because the tempting design breaks it.
+
+**Recording a count changes nothing.** Not the balance, not the ledger, not this
+screen's own stock figures — and the form says so out loud above the fields,
+because every other inventory screen a person has used _does_ change them. The
+variance that comes back is evidence; it sits in the list below marked as
+needing review, and it stays there until somebody with `inventory.count` accepts
+it and says why.
+
+**The form does not show what Ekon expects.** Not because this is a blind
+count — blind counting is a post-OR1 workflow with locking and second counts,
+and none of that is here — but because a number printed beside the box you are
+about to type in is an invitation to agree with it. Somebody who walks a shelf,
+finds six, and sees `7` on the screen types 7 more often than they should, and
+the discrepancy that would have told the shop something disappears. The
+comparison comes _after_ submission, from the server, which is also the only
+place it can honestly come from: the expected quantity is read inside the
+recording transaction and the browser never has it.
+
+**Zero is a real observation**, and the hint says so. An empty shelf is exactly
+the count that matters most, and a form that looked like it wanted a positive
+number is a form somebody skips when the shelf is empty.
+
+**The three numbers are never recomputed.** A count taken last Tuesday says what
+it said last Tuesday even though the shelf has moved since. It is evidence about
+a moment, not a view of the present, and a list that re-derived the variance
+against today's balance would rewrite that evidence every time the shop traded.
+
+### Accepting a difference
+
+The reconciliation dialog says:
+
+> This will adjust inventory by −1.
+
+and it must never say:
+
+> This will set inventory to 6.
+
+The second is what a reader assumes and it is **wrong**. Six was true when the
+shelf was walked; if a unit sold in the hour since, the shelf now holds five and
+accepting a difference of one leaves four. The server applies the observed
+_difference_ to the current balance — the only arithmetic that keeps every
+legitimate movement posted in between — and a dialog that promised a destination
+would be promising a number the system will not produce.
+
+A reason is required, because a stock change nobody explained is exactly what
+the count principle exists to prevent, and `OTHER` demands a note because it
+explains nothing on its own. There is deliberately no "the count was wrong" in
+the vocabulary: a mistaken count is corrected by counting again, not by
+accepting a difference nobody believes in.
+
+### What each act invalidates
+
+This is the invalidation rule the whole workflow rests on, and it is the one
+place a well-meaning `invalidateQueries` would quietly break the principle:
+
+| act               | counts | balances | movements |
+| ----------------- | ------ | -------- | --------- |
+| recording a count | yes    | **no**   | **no**    |
+| reconciling one   | yes    | yes      | yes       |
+
+Recording a count posts no movement and moves no stock. Re-reading the balances
+afterwards would be the screen quietly implying that something changed on the
+shelf.
+
+## Stock history
+
+The evidence screen. Every other screen answers _what is true now_; this one
+answers _how it got that way_, which is the question somebody asks when the two
+disagree.
+
+**`before → after` is shown, not just the delta.** The delta says what changed;
+the pair says what the shelf held on either side of it, which is what somebody
+reconstructing a discrepancy actually needs. Both come from the ledger row and
+neither is computed in the browser — the arithmetic was settled when the
+movement was posted, and recomputing it here would be inventing a second answer.
+
+**A sale leads with its reason, not its mechanism.** An `ISSUE` reads as _Sold_
+rather than _Stock removed_, because sold, broken and taken for the shop's own
+use are three different things and a feed that collapsed them would hide exactly
+the distinction the ledger keeps a reason column for. Everything else leads with
+its type, with the reason beside it.
+
+**Relationships are shown in words, never as ids.** A movement that was undone
+is marked as such — otherwise somebody scrolling past a receipt of 10 reads it
+as stock the shop received and goes looking for where it went. A reversal says
+it is one, and a movement that came from a count says so, which is what turns a
+reconciliation from an unexplained stock change into evidence.
+
+**Labels are current, not historical.** The ledger stores ids; the product name,
+the location name and the person's name are resolved by the server from the
+tables that own them today. A product renamed last week changes what an old
+movement _displays_ while the movement still refers to the same variant and SKU.
+
+**Pagination is a cursor and a "load more" that appends**, never page numbers:
+the ledger grows at the front, so page four means something different every time
+a receipt is booked in. The filters are the item, the shelf, and the kind of
+movement — chosen by name, with the uuid going over the wire without ever being
+shown. There is deliberately no date range: the feed is newest-first, and two
+more controls between somebody and the row they want is the cost of a filter
+nobody asked for.
+
+### Reversing a movement
+
+**The dialog never says _delete_, _undo_, or _remove record_,** because none of
+those is what happens: the original stays in the ledger exactly as it was and a
+compensating movement is appended beside it. Somebody who thinks they erased a
+mistake will be surprised later by a history that still shows it, and a person
+surprised by their own inventory system stops trusting it.
+
+It also says the thing that is easy to get wrong: a reversal moves **current**
+stock. Reversing a receipt of ten takes ten off the shelf as it is now, not off
+the shelf as it was that morning — and if the shop has sold some since, the
+server refuses rather than letting the shelf go negative.
+
+The button is drawn only where the ledger's own rules allow it (INV-2): a
+`REVERSAL` may not be reversed, and a movement that has already been reversed
+may not be reversed again. It deliberately does **not** try to predict the stock
+floor — that depends on a balance this screen does not have and must not guess
+at, and the refusal is rendered when it comes back.
+
+## Correcting a number
+
+**Adjusting is not Removing, and the dialog works hard to say so.** Removing
+records that units left the shelf — sold, broken, taken for the shop's own use.
+Adjusting records that nothing happened at all and the _number_ was wrong: a
+delivery entered twice, a sale rung up while the system was down, a mis-keyed
+receipt. They move the same stock and mean opposite things in a history,
+permanently, which is why they are different capabilities and why this is a
+small dialog attached to the row whose number is wrong rather than a third entry
+beside Receive and Remove.
+
+It is also not a count. A count observes the shelf and leaves evidence; an
+adjustment states a correction with no observation necessarily behind it. If
+somebody walked the shelf and found six, the honest workflow is Counts.
+
+**Nobody types a minus sign.** The form asks _which way_ and _how many_, and
+`lib/adjustment.ts` turns the pair into the signed delta the contract wants —
+exactly one place in the browser knows that "fewer" means a negative number. The
+sentence above the button then says what will actually be sent, so the
+translation happens in front of the person rather than behind them.
+
+## Withdrawing merchandise
+
+Three states, in plain words rather than as a state machine:
+
+| status           | what it means for the shop                                                 |
+| ---------------- | -------------------------------------------------------------------------- |
+| **Active**       | sold and restocked normally                                                |
+| **Discontinued** | no longer restocked; what is on the shelf still sells and is still counted |
+| **Archived**     | out of day-to-day use, kept for history                                    |
+
+The consequence is spelled out before the change, because both of the
+interesting ones are easy to misread. _Discontinued_ sounds like gone and is
+not. _Archived_ sounds like deleted and is not — the history stays, and the
+server refuses it outright while any stock remains.
+
+**Nothing here moves stock, in either direction.** If archiving is refused
+because six are still on a shelf, this offers no button to write them off: that
+would be a lifecycle screen posting an inventory movement, which is the one
+thing a lifecycle change must never do. The refusal is shown as what it is, and
+the remedy is to sell or correct the remaining stock somewhere that says so.
+
+`ARCHIVED → ACTIVE` is not offered, because the server refuses it: coming back
+into use and being restocked again are two decisions, so archived merchandise is
+offered _Discontinued_ and somebody makes the second choice separately.
+
+## Retries, and the operation id
+
+Every command that posts to the ledger carries an operation id, and the rule is
+the same everywhere: **the id is generated once, when the form or the dialog
+opens, and reused by every retry of that command.** A fresh id per submit click
+would turn the server's duplicate protection off from the outside — the retry
+after a dropped connection would become a second receipt, a second correction, a
+second count of one shelf.
+
+A new id is taken only when the command is _settled_ and the next one is a
+different fact: the count form takes one after a successful record, because the
+next shelf is a different observation. A second press while the first request is
+still open sends nothing at all.
+
+## Three widths
+
+Explicit presentations rather than one markup that hides columns with CSS. The
+stock register is a real table on a desktop, a narrower table on a tablet, and a
+list of records on a phone — three sets of markup, because a table with three of
+its five columns display-noned is a table a screen reader still reads five
+columns of.
+
+Counts, History and Products are never tables at any width. A movement is six
+facts that belong together, and six columns on a 390px screen is either a
+sideways scroll or six illegible columns; the columns become rows as the screen
+narrows. **Nothing scrolls sideways at any width.**
+
+The phone's bottom bar carries the three everyday acts — Inventory, Receive,
+Remove — and everything else lives behind More. The bar is bounded on purpose: a
+bottom bar that grew with every new screen would end up unusable at exactly the
+width it exists for. Counts and History are real destinations and they are one
+press further away, which is the right trade for screens somebody opens a few
+times a day rather than a few times an hour.
 
 ## Creating an account
 
@@ -417,11 +726,18 @@ its own.
 ## Routing
 
 There is none, deliberately. One authentication boundary, and inside it a shell
-that swaps its main panel between six temporary screens — home, products,
-stock, receiving, removal, and creating an account. A router would buy
-addressable URLs for screens that are about to be replaced, and would have to be
-replaced with them. A hard refresh still works: the backend's single-page
-fallback serves `index.html` for any non-`/api/` path.
+that swaps its main panel between eight screens — home, inventory, receiving,
+removal, counts, history, products, and creating an account. A router would buy
+addressable URLs while the visual design is still ahead of us, and every one of
+them would have to be revisited with it. A hard refresh still works: the
+backend's single-page fallback serves `index.html` for any non-`/api/` path.
+
+What a router would otherwise have bought is carried instead by a small
+`ViewFocus` passed alongside the destination: opening History from an inventory
+row arrives _already filtered to that SKU_, and opening Counts from one arrives
+with the item and the shelf already chosen. A destination somebody has to
+re-identify the thing they were just looking at on is a destination they stop
+using.
 
 ## Translations
 
@@ -441,52 +757,71 @@ makes, which is the moment it matters. Nothing in this application polls, and
 nothing refreshes on a timer.
 
 A query key that several screens depend on is **defined once and imported**,
-never written out twice. `inventoryBalancesQueryKey` lives in
-`lib/inventoryQueries.ts` and now has three users: Stock reads it, Removal reads
-it _and_ invalidates it, and Receiving invalidates it. `catalogProductsQueryKey`
-lives in `lib/catalogQueries.ts` and has three of its own: Products reads it,
-Receiving reads it for its variant choices, and creating a product invalidates
-it — which is the whole mechanism by which a new item becomes something the shop
-can book in. Invalidation matches on
-key equality, so two literals would drift apart silently — the write would
-succeed, the numbers would stay stale, and nothing would fail. The writes import
-the key, not the screen; a write that had to pull in a component to learn what
-to invalidate would be a dependency pointing the wrong way.
+never written out twice. Invalidation matches on key equality, so two literals
+would drift apart silently — the write would succeed, the numbers would stay
+stale, and nothing would fail. The writes import the key, not the screen; a
+write that had to pull in a component to learn what to invalidate would be a
+dependency pointing the wrong way.
+
+| key                                                  | read by                    | invalidated by                                         |
+| ---------------------------------------------------- | -------------------------- | ------------------------------------------------------ |
+| `inventoryBalancesQueryKey`                          | Inventory, Counts, History | Receive, Remove, Adjust, Reverse, Reconcile, Lifecycle |
+| `catalogProductsQueryKey`                            | Products, Receiving        | Creating a product, Lifecycle                          |
+| `countsQueryPrefix` (`['inventory','counts']`)       | Home, Counts               | Recording a count, Reconciling                         |
+| `movementsQueryPrefix` (`['inventory','movements']`) | History                    | Adjust, Reverse, Reconcile                             |
+
+The two feeds are keyed **by their filters** — `countsQueryKey({status:'OPEN'})`
+is not `countsQueryKey({})` — because "everything" and "what is still open" are
+two different questions and must not share a cache entry. Writes invalidate by
+_prefix_ rather than by exact key, so the change is visible under whichever
+filters anybody happens to have open. Home reads the open feed with the Counts
+screen's own key, which is what makes arriving there show exactly what the
+attention panel counted.
+
+Successive pages of one feed are **not** keyed by cursor. They accumulate into
+one cache entry in the screen's own state, because keying by cursor would make
+each page its own entry that the first one could never invalidate.
 
 ## Still missing
 
-- **anything about stock beyond what is on the shelf now.** No movement history,
-  no audit drawer, no low-stock threshold or colour, no reorder point, no
-  valuation, no cost, and no supplier — and no sorting, paging, or export;
-- **adjustments and reversal.** Removal records that stock _left_; an adjustment
-  records that the _balance was wrong_, and a reversal undoes one movement by
-  appending its compensation. Both have their own capability, their own
-  permanent movement type, and an API — and no screen, which is PR 7;
-- **lifecycle control.** Merchandise is withdrawn and restored through the API;
-  the receiving screen filters its choices to `ACTIVE` merchandise, and there is
-  no screen that changes a status;
-- physical counts;
+- **analytics and alerting.** No dashboard, no charts, no low-stock threshold or
+  colour, no reorder point, no valuation, no trend, no "sales this week". Every
+  one of those is a number the business would read as true, and a made-up figure
+  in an inventory system is not a placeholder, it is a lie somebody will act on.
+  Home carries exactly one figure that is not a door — the count of unexplained
+  count differences — and it earns its place by being _work_ rather than a
+  metric;
+- **anything a count session would need.** No scope, no campaign, no blind
+  count, no second count, no locking, no approval queue. One observation covers
+  one item at one location;
+- **suppliers and purchase orders.** Receiving records that stock arrived, and
+  nothing about who it came from or what was ordered;
+- **barcode scanning.** Barcodes are typed and stored; there is no camera, no
+  symbology library, and no check-digit rule;
 - **any sales domain.** `SOLD` is a removal reason. There is no sale, order,
-  customer, price, payment, tax, receipt, or refund, and none is planned here;
-- **catalog management beyond creating a product.** The form creates one and
-  stops: no editing, no renaming, no adding a variant to a product that exists,
-  no deactivation, and no search or paging over the list. Each is its own
-  decision, and a product created wrongly is replaced by creating the right one;
+  customer, payment, tax, receipt, or refund, and none is planned here;
+- **catalog management beyond entering merchandise and withdrawing it.** No
+  editing, no renaming, no adding a variant to a product that exists, no
+  managing the brand or classification vocabularies, and no search or paging
+  over the list;
 - **user management beyond creating an account.** The one screen creates a
   person and stops: no list, no search, no editing, no role change, no
   deactivation, no password change, and no password reset. Each is a separate
   authority over somebody's access, and none of them blocks running the shop;
-- no audit log, no reports, no notifications;
+- **reports and export.** No CSV, no printing, no scheduled anything. `audit.read`
+  and `reports.export` still open no door, because a link to a screen that does
+  not exist is worse than a missing link;
 - offline operation. Connectivity failures are visible and a retry is safe, but
-  nothing is queued and nothing survives a closed tab. The draft helpers in
-  `lib/operations.ts` predate receiving and are unused by it — receiving
-  persists nothing;
+  nothing is queued and nothing survives a closed tab;
 - the final visual design.
 
-The loop is closed in the browser, end to end, with no step that needs a
+The OR1 loop is closed in the browser, end to end, with no step that needs a
 terminal: after the owner bootstrap, the owner signs in, creates the employees'
-accounts, and creates the first product; an employee signs in, books in a
-delivery, reads the number it produced, records what leaves, and signs out — on
-the same laptop, in their own language, with every retry safe. Full production
-deployment is reviewed now that it is — see
+accounts, and enters the shop's merchandise; an employee books in a delivery,
+reads the number it produced, records what leaves, walks the shelves and records
+what was found, and somebody with the authority explains the difference and lets
+the shop's numbers move — with a correction and a reversal available for the two
+kinds of mistake, and merchandise withdrawn when the shop stops selling it. On
+the same laptop or the same phone, in their own language, with every retry safe.
+Full production deployment is reviewed now that it is — see
 [docs/06-operations/deployment.md](../docs/06-operations/deployment.md).

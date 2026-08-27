@@ -76,7 +76,17 @@ describe('capability-aware navigation', () => {
 
   it('offers receiving to somebody who may receive stock', async () => {
     await signedInAs({ capabilities: ['inventory.read', 'inventory.receive'] });
-    expect(navigation()).toEqual([ht['nav.home'], ht['nav.stock'], ht['nav.receive']]);
+    // Counts and History ride on `inventory.read`: seeing what has been counted
+    // and how the numbers got there is inventory visibility. Recording a count
+    // and accepting a difference need `inventory.count`, and those are gated on
+    // the screen rather than at the door.
+    expect(navigation()).toEqual([
+      ht['nav.home'],
+      ht['nav.stock'],
+      ht['nav.receive'],
+      ht['nav.counts'],
+      ht['nav.history'],
+    ]);
   });
 
   it('does not offer receiving to somebody who may only read stock', async () => {
@@ -84,7 +94,12 @@ describe('capability-aware navigation', () => {
     // holding only the first must not be shown a door the API will shut.
     await signedInAs({ capabilities: ['inventory.read'] });
 
-    expect(navigation()).toEqual([ht['nav.home'], ht['nav.stock']]);
+    expect(navigation()).toEqual([
+      ht['nav.home'],
+      ht['nav.stock'],
+      ht['nav.counts'],
+      ht['nav.history'],
+    ]);
     expect(screen.queryByRole('button', { name: ht['nav.receive'] })).toBeNull();
   });
 
@@ -95,7 +110,13 @@ describe('capability-aware navigation', () => {
 
   it('offers removal to somebody who may remove stock', async () => {
     await signedInAs({ capabilities: ['inventory.read', 'inventory.remove'] });
-    expect(navigation()).toEqual([ht['nav.home'], ht['nav.stock'], ht['nav.remove']]);
+    expect(navigation()).toEqual([
+      ht['nav.home'],
+      ht['nav.stock'],
+      ht['nav.remove'],
+      ht['nav.counts'],
+      ht['nav.history'],
+    ]);
   });
 
   it('offers removal on the capability alone, without inventory.read', async () => {
@@ -112,13 +133,23 @@ describe('capability-aware navigation', () => {
     expect(screen.queryByRole('button', { name: ht['nav.remove'] })).toBeNull();
   });
 
-  it('does not offer removal for inventory.adjust', async () => {
-    // Correcting a balance that was wrong is not recording that stock left,
-    // and the adjustment screen does not exist. A capability is not a
-    // destination.
+  it('opens no destination at all for inventory.adjust', async () => {
+    // Correcting a balance that was wrong is not recording that stock left, and
+    // it is not a place somebody goes: adjusting belongs to the inventory row
+    // whose number is wrong. A capability is not a destination, and this one
+    // deliberately opens no door of its own — including Remove's.
     await signedInAs({ capabilities: ['inventory.adjust'] });
     expect(navigation()).toEqual([ht['nav.home']]);
     expect(screen.queryByRole('button', { name: ht['nav.remove'] })).toBeNull();
+    expect(screen.queryByRole('button', { name: ht['nav.adjust'] })).toBeNull();
+  });
+
+  it('opens no destination for inventory.reverse or catalog.deactivate either', async () => {
+    // The other two contextual actions. Reversing belongs to a movement in
+    // History and withdrawing merchandise belongs to a product on Products;
+    // neither is a place, so neither is a door.
+    await signedInAs({ capabilities: ['inventory.reverse', 'catalog.deactivate'] });
+    expect(navigation()).toEqual([ht['nav.home']]);
   });
 
   it('offers removal on the employee role default grants', async () => {
@@ -129,12 +160,15 @@ describe('capability-aware navigation', () => {
       role: 'EMPLOYEE',
       capabilities: DEFAULT_ROLE_CAPABILITIES.EMPLOYEE ?? [],
     });
-    // Operations first, then management — the order the sidebar groups them in.
+    // Operations, then control, then management — the order the sidebar groups
+    // them in.
     expect(navigation()).toEqual([
       ht['nav.home'],
       ht['nav.stock'],
       ht['nav.receive'],
       ht['nav.remove'],
+      ht['nav.counts'],
+      ht['nav.history'],
       ht['nav.products'],
     ]);
     // And not the door that would let them make a shortfall disappear.
@@ -172,6 +206,8 @@ describe('capability-aware navigation', () => {
       ht['nav.stock'],
       ht['nav.receive'],
       ht['nav.remove'],
+      ht['nav.counts'],
+      ht['nav.history'],
       ht['nav.products'],
     ]);
   });

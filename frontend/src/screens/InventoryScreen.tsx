@@ -1,5 +1,9 @@
 import { useMemo, useState } from 'react';
+import type { VariantStockBalance } from '@ekon/shared';
+import type { View, ViewFocus } from '../app/navigation.js';
 import { useBreakpoint } from '../app/useBreakpoint.js';
+import { hasCapability } from '../auth/capabilities.js';
+import { useAuthenticatedUser } from '../auth/useAuth.js';
 import { useProtectedQuery } from '../auth/useProtectedQuery.js';
 import { ErrorNotice } from '../components/ErrorNotice.js';
 import { PageHeader } from '../components/PageHeader.js';
@@ -7,9 +11,11 @@ import { SECONDARY_BUTTON, TEXT_INPUT } from '../components/styles.js';
 import { useTranslator } from '../i18n/index.js';
 import { getInventoryBalances, inventoryBalancesQueryKey } from '../lib/inventoryQueries.js';
 import { filterStockBalances } from '../lib/stock.js';
+import { AdjustDialog } from './inventory/AdjustDialog.js';
 import { InventoryRecords } from './inventory/InventoryRecords.js';
 import { InventoryTable } from './inventory/InventoryTable.js';
 import { InventoryTabletTable } from './inventory/InventoryTabletTable.js';
+import { RowActions } from './inventory/RowActions.js';
 
 /**
  * What the business has, which variant it is, where it is, and how much there
@@ -29,10 +35,18 @@ import { InventoryTabletTable } from './inventory/InventoryTabletTable.js';
  * read the location list — the two queries a screen assembling the same picture
  * out of pieces would need, and two more chances for the pieces to disagree.
  *
- * **Nothing here changes anything.** There is no adjust button, no removal, no
- * count, and the rows are not clickable. Receiving and removal are separate
- * destinations behind separate capabilities: somebody may hold `inventory.read`
- * and neither of the others, so this screen offers no way into either of them.
+ * **Almost nothing here changes anything.** The rows are not clickable and the
+ * numbers are not editable — a balance is a projection of the ledger, and the
+ * only way to move one is to post a movement. What each row now carries is a
+ * small set of ways *onward*: this item's history, a count of this shelf, and —
+ * for somebody with `inventory.adjust` — a correction of a number that is
+ * wrong. Each opens its own workflow with its own confirmation, and each is
+ * absent rather than disabled for somebody who may not use it.
+ *
+ * Receiving and removal are still **not** offered here. Both have their own
+ * destination behind their own capability, both are everyday work, and giving
+ * the same act two front doors that behave differently is how two screens start
+ * disagreeing about what a receipt is.
  *
  * Three presentations, one at a time: a five-column table on a laptop, a
  * three-column one on a tablet, and a stack of records on a phone. They are
@@ -42,10 +56,24 @@ import { InventoryTabletTable } from './inventory/InventoryTabletTable.js';
  * about is *which* items they show: the filtering happens once, here, and all
  * three are handed the same list.
  */
-export function InventoryScreen() {
+export function InventoryScreen({
+  onOpen,
+}: {
+  /** How this screen sends somebody onward, with what to open it about. */
+  onOpen: (view: View, about?: ViewFocus) => void;
+}) {
   const t = useTranslator();
+  const user = useAuthenticatedUser();
   const breakpoint = useBreakpoint();
   const [search, setSearch] = useState('');
+  /** The line whose number is being corrected, if one is. */
+  const [adjusting, setAdjusting] = useState<{
+    variant: VariantStockBalance;
+    locationId: string;
+  } | null>(null);
+
+  const mayCount = hasCapability(user, 'inventory.count');
+  const mayAdjust = hasCapability(user, 'inventory.adjust');
 
   const balances = useProtectedQuery({
     queryKey: inventoryBalancesQueryKey,
@@ -61,6 +89,45 @@ export function InventoryScreen() {
 
   /** Whether there is anything to search *through*, as opposed to nothing to show. */
   const searchable = stock !== undefined && stock.length > 0;
+
+  /**
+   * Which shelf a row's actions are about when the row spans several.
+   *
+   * The default location if the variant is held at one, otherwise the first the
+   * server returned — and it is a *starting point* rather than a decision: both
+   * dialogs it opens let somebody choose another. Counting and correcting are
+   * per (item, shelf), and a row that silently picked one without saying so
+   * would be the screen deciding something it has no business deciding.
+   */
+  function preferredLocation(variant: VariantStockBalance): string {
+    const preferred = variant.locations.find((location) => location.isDefault);
+    return (preferred ?? variant.locations[0])?.locationId ?? '';
+  }
+
+  /**
+   * The actions one row offers, or nothing at all.
+   *
+   * `undefined` when there is nothing to offer — a variant with no active
+   * location has no shelf for a count or a correction to be about, and history
+   * without a location is still worth reaching, so the guard is on the shelf
+   * rather than on the capabilities.
+   */
+  function renderActions(variant: VariantStockBalance) {
+    const locationId = preferredLocation(variant);
+    return (
+      <RowActions
+        variant={variant}
+        locationId={locationId}
+        mayCount={mayCount && locationId !== ''}
+        mayAdjust={mayAdjust && locationId !== ''}
+        onHistory={(chosen) => onOpen('history', { variantId: chosen.variantId })}
+        onCount={(chosen, shelf) =>
+          onOpen('counts', { variantId: chosen.variantId, locationId: shelf })
+        }
+        onAdjust={(chosen, shelf) => setAdjusting({ variant: chosen, locationId: shelf })}
+      />
+    );
+  }
 
   return (
     <section className="flex flex-col gap-5">
@@ -159,12 +226,21 @@ export function InventoryScreen() {
 
       {matches.length > 0 &&
         (breakpoint === 'mobile' ? (
-          <InventoryRecords balances={matches} />
+          <InventoryRecords balances={matches} renderActions={renderActions} />
         ) : breakpoint === 'tablet' ? (
-          <InventoryTabletTable balances={matches} />
+          <InventoryTabletTable balances={matches} renderActions={renderActions} />
         ) : (
-          <InventoryTable balances={matches} />
+          <InventoryTable balances={matches} renderActions={renderActions} />
         ))}
+
+      {adjusting !== null && (
+        <AdjustDialog
+          variant={adjusting.variant}
+          initialLocationId={adjusting.locationId}
+          onDone={() => setAdjusting(null)}
+          onCancel={() => setAdjusting(null)}
+        />
+      )}
     </section>
   );
 }

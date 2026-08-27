@@ -190,3 +190,82 @@ describe('tablet shell', () => {
     expect(within(sheet).getByRole('button', { name: ht['auth.signOut'] })).toBeInTheDocument();
   });
 });
+
+/**
+ * The three control-and-review destinations PR 7 added, and the one property
+ * that had to survive them.
+ *
+ * Counts and History are real places somebody goes — "what did we find on the
+ * shelves" and "how did the numbers get here" are questions, not actions on a
+ * row. Adjusting, reversing and withdrawing merchandise are the opposite: each
+ * belongs to the thing it is about, and none of them opens a door.
+ */
+describe('control destinations', () => {
+  it('gives reviewing its own group between doing and managing', async () => {
+    // Three short lists read better than one long one, and the split is by what
+    // somebody came to do: operate the shop, check it, or run it.
+    await signedInAt('desktop', [...EVERYTHING]);
+
+    expect(group(ht['nav.groupControl'])).toEqual([ht['nav.counts'], ht['nav.history']]);
+  });
+
+  it('opens both on inventory.read, because seeing is seeing', async () => {
+    // Recording a count and accepting a difference need `inventory.count`, and
+    // those are gated on the screen rather than at the door.
+    await signedInAt('desktop', ['inventory.read']);
+
+    expect(group(ht['nav.groupControl'])).toEqual([ht['nav.counts'], ht['nav.history']]);
+  });
+
+  it('drops the whole group for somebody who may not see stock', async () => {
+    await signedInAt('desktop', ['catalog.read']);
+
+    expect(screen.queryByText(ht['nav.groupControl'])).toBeNull();
+  });
+
+  it("keeps the phone's bottom bar at the three everyday acts", async () => {
+    // The bar is bounded on purpose. Counts and History are real destinations
+    // and they are behind More, because a bottom bar that grew with every new
+    // screen would end up unusable at the width it exists for.
+    await signedInAt('mobile', [...EVERYTHING, 'inventory.count']);
+
+    const bar = screen.getByRole('navigation', { name: ht['nav.everyday'] });
+    expect(
+      within(bar)
+        .getAllByRole('button')
+        .map((button) => button.textContent ?? ''),
+    ).toEqual([ht['nav.stock'], ht['nav.receive'], ht['nav.remove'], ht['nav.more']]);
+  });
+
+  it('offers them behind More on a phone', async () => {
+    await signedInAt('mobile', ['inventory.read']);
+
+    const sheet = openPanel();
+    expect(within(sheet).getByRole('button', { name: ht['nav.counts'] })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: ht['nav.history'] })).toBeInTheDocument();
+  });
+
+  it('opens no destination anywhere for the three contextual capabilities', async () => {
+    // Adjusting belongs to the inventory row whose number is wrong, reversing
+    // to a movement in History, and withdrawing merchandise to a product on
+    // Products. A capability is not a destination.
+    await signedInAt('mobile', ['inventory.adjust', 'inventory.reverse', 'catalog.deactivate']);
+
+    const bar = screen.getByRole('navigation', { name: ht['nav.everyday'] });
+    expect(
+      within(bar)
+        .getAllByRole('button')
+        .map((button) => button.textContent ?? ''),
+    ).toEqual([ht['nav.more']]);
+
+    // The sheet's own Close is not a destination; what it offers is Home and
+    // the way out, and nothing else.
+    const sheet = openPanel();
+    expect(
+      within(sheet)
+        .getAllByRole('button')
+        .map((button) => button.textContent ?? '')
+        .filter((label) => label !== ht['nav.close']),
+    ).toEqual([ht['nav.home'], ht['auth.signOut']]);
+  });
+});

@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import type { Product } from '@ekon/shared';
-import { useBreakpoint } from '../app/useBreakpoint.js';
 import { hasCapability } from '../auth/capabilities.js';
 import { useAuthenticatedUser } from '../auth/useAuth.js';
 import { useProtectedQuery } from '../auth/useProtectedQuery.js';
@@ -9,13 +8,24 @@ import { PageHeader } from '../components/PageHeader.js';
 import { PRIMARY_BUTTON } from '../components/styles.js';
 import { useTranslator, type Translator } from '../i18n/index.js';
 import { catalogProductsQueryKey, getCatalogProducts } from '../lib/catalogQueries.js';
-import { ProductRecords } from './catalog/ProductRecords.js';
-import { ProductTable } from './catalog/ProductTable.js';
-import { NewProductForm } from './NewProductForm.js';
+import { catalogMetadataQueryKey, getCatalogMetadata } from '../lib/metadataQueries.js';
+import { LifecycleControl } from './catalog/LifecycleControl.js';
+import { NewProductForm } from './catalog/NewProductForm.js';
+import { ProductList } from './catalog/ProductList.js';
 
 /**
- * The catalog: what the shop sells, and — for somebody who may write it — the
- * form that puts the first item in it.
+ * Products: the merchandise master — what the shop sells, as merchandise.
+ *
+ * This screen and Inventory are the two a person confused them for each other,
+ * and the difference is now carried by what each one is *made of*. Products
+ * holds identity: brand, name, classification, the variants underneath, what
+ * each one sells for and cost, and whether the shop still stocks it. **There is
+ * no quantity on this page at all** — a product exists whether or not any is on
+ * a shelf, and "how many, and where" is one destination away under a heading
+ * that says exactly that.
+ *
+ * The module behind it is still called `catalog`, and the routes still are. The
+ * word people use for it is Products, and the interface uses theirs.
  *
  * `GET /api/catalog/products` requires `catalog.read`, and the nav entry that
  * leads here is shown for the same capability — but the two are not the same
@@ -40,7 +50,6 @@ import { NewProductForm } from './NewProductForm.js';
 export function CatalogScreen() {
   const t = useTranslator();
   const user = useAuthenticatedUser();
-  const breakpoint = useBreakpoint();
 
   const [creating, setCreating] = useState(false);
   /** The product the last submission created. Only ever set from a response. */
@@ -51,7 +60,25 @@ export function CatalogScreen() {
     queryFn: ({ signal }) => getCatalogProducts(signal),
   });
 
+  /**
+   * The catalog's own vocabulary, read only when somebody is about to enter
+   * merchandise. It is what the form offers instead of asking anybody to type a
+   * structural attribute name the server would refuse.
+   */
+  const metadata = useProtectedQuery({
+    queryKey: catalogMetadataQueryKey,
+    queryFn: ({ signal }) => getCatalogMetadata(signal),
+    enabled: creating,
+  });
+
   const mayCreate = hasCapability(user, 'catalog.write');
+  /**
+   * Withdrawing merchandise is its own capability, and a narrower one than
+   * entering it: somebody trusted to type in a new sandal is not thereby
+   * trusted to retire the range. Without it there is no control at all — not a
+   * disabled one.
+   */
+  const mayChangeLifecycle = hasCapability(user, 'catalog.deactivate');
 
   return (
     <section className="flex flex-col gap-5">
@@ -100,6 +127,7 @@ export function CatalogScreen() {
 
       {creating && (
         <NewProductForm
+          metadata={metadata.data}
           onCreated={(product) => {
             setCreated(product);
             setCreating(false);
@@ -129,13 +157,16 @@ export function CatalogScreen() {
         </div>
       )}
 
-      {products.data !== undefined &&
-        products.data.length > 0 &&
-        (breakpoint === 'mobile' ? (
-          <ProductRecords products={products.data} />
-        ) : (
-          <ProductTable products={products.data} />
-        ))}
+      {products.data !== undefined && products.data.length > 0 && (
+        <ProductList
+          products={products.data}
+          renderLifecycle={
+            mayChangeLifecycle
+              ? (product) => <LifecycleControl key={product.id} product={product} />
+              : undefined
+          }
+        />
+      )}
     </section>
   );
 }

@@ -50,16 +50,20 @@ function columnNames(): string[] {
 }
 
 describe('the stock register on a laptop', () => {
-  it('is a real table with the five approved columns, in order', async () => {
+  it('is a real table with the five reading columns, in order', async () => {
     await openStock({ [BALANCES_ROUTE]: json(SHELF) });
 
     expect(screen.getByRole('table')).toBeInTheDocument();
+    // Five columns of facts, then a last one for the ways onward. Its heading
+    // is for a screen reader rather than for the design — a visible "Actions"
+    // over two small buttons would be a heading over a heading.
     expect(columnNames()).toEqual([
       ht['catalog.columnProduct'],
       ht['catalog.columnVariant'],
       ht['catalog.sku'],
       ht['stock.columnLocations'],
       ht['stock.total'],
+      ht['stock.columnActions'],
     ]);
   });
 
@@ -73,8 +77,9 @@ describe('the stock register on a laptop', () => {
       [`Main Store${ht['inventory.defaultLocation']}`, '5'],
       ['Backroom', '12'],
     ]);
-    // Four cells beside the row header: variant, SKU, shelves, total.
-    expect(within(rice).getAllByRole('cell')).toHaveLength(4);
+    // Five cells beside the row header: variant, SKU, shelves, total, and the
+    // ways onward.
+    expect(within(rice).getAllByRole('cell')).toHaveLength(5);
   });
 
   it('names the row by its product, so a quantity is announced with its item', async () => {
@@ -91,11 +96,16 @@ describe('the stock register on a laptop', () => {
 
     // A value, a cost, a low-stock state, a reorder point, or a last movement
     // would each have to appear here first — and none of them is in the
-    // response.
-    expect(screen.getAllByRole('columnheader')).toHaveLength(5);
-    // No selection column and no action column either: rows are not commands.
+    // response. Five columns of facts, plus the actions.
+    expect(screen.getAllByRole('columnheader')).toHaveLength(6);
+    // No selection column, and the row itself is still not a command: nothing
+    // here edits a number, and the buttons in the last column are doors to
+    // other workflows rather than controls over this one.
     expect(screen.queryAllByRole('checkbox')).toEqual([]);
-    expect(within(screen.getByRole('table')).queryAllByRole('button')).toEqual([]);
+    expect(within(screen.getByRole('row', { name: /Diri/ })).queryAllByRole('button')).toEqual([
+      // `inventory.read` alone: history and nothing else.
+      expect.objectContaining({ textContent: ht['stock.actionHistory'] }),
+    ]);
   });
 });
 
@@ -108,6 +118,7 @@ describe('the stock register on a tablet', () => {
       ht['stock.columnItem'],
       ht['stock.columnLocations'],
       ht['stock.total'],
+      ht['stock.columnActions'],
     ]);
   });
 
@@ -128,10 +139,10 @@ describe('the stock register on a tablet', () => {
       [`Main Store${ht['inventory.defaultLocation']}`, '5'],
       ['Backroom', '12'],
     ]);
-    // Two cells beside the item header: the shelves, and the total the server
-    // sent for the whole variant.
+    // Three cells beside the item header: the shelves, the total the server
+    // sent for the whole variant, and the ways onward.
     const cells = within(rice).getAllByRole('cell');
-    expect(cells).toHaveLength(2);
+    expect(cells).toHaveLength(3);
     expect(cells[1]).toHaveTextContent('17');
   });
 });
@@ -224,7 +235,8 @@ describe('the total quantity', () => {
     await openStock({ [BALANCES_ROUTE]: json([DISAGREEING]) });
 
     const cells = within(stockRecord('Diri')).getAllByRole('cell');
-    expect(cells[cells.length - 1]).toHaveTextContent('99');
+    // The total is the second-to-last cell now that the actions follow it.
+    expect(cells[cells.length - 2]).toHaveTextContent('99');
     // And the shelf quantities are still the shelf quantities.
     expect(locationLines(stockRecord('Diri')).map(([, quantity]) => quantity)).toEqual(['5', '12']);
     expect(screen.queryByText('17')).toBeNull();
