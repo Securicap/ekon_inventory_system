@@ -115,12 +115,49 @@ export function LifecycleControl({ product }: { product: Product }) {
               not what it is called. */}
           <p className="text-pretty">{t(CONSEQUENCE_KEYS[target])}</p>
 
-          {/* Including "cannot archive while stock remains", which is a
-              business answer rather than a failure, and is shown as one. */}
-          {submit.isError && <ErrorNotice error={submit.error} />}
+          {/* "Cannot archive while stock remains" is a business answer rather
+              than a failure, and is shown as one — in its own words. The shared
+              notice reads a bare `CONFLICT` as "the item or the location is
+              closed", which is true of receiving and removal and is the wrong
+              sentence here: the merchandise is not closed, it still has units
+              on a shelf, and the remedy is to sell or correct them. */}
+          {submit.isError &&
+            (isStockConflict(target, submit.error) ? (
+              <p
+                role="alert"
+                className="rounded-md border border-danger bg-danger-soft px-3.5 py-3 text-[15px] font-semibold text-danger-ink"
+              >
+                {t('catalog.archiveBlockedByStock')}
+              </p>
+            ) : (
+              <ErrorNotice error={submit.error} />
+            ))}
         </ConfirmDialog>
       )}
     </>
+  );
+}
+
+/**
+ * The one refusal this control says something specific about: archiving was
+ * refused because units remain.
+ *
+ * Narrowed to the archive attempt rather than to any `409`, because the other
+ * two transitions can only conflict for reasons this sentence would misdescribe
+ * — and a wrong-but-confident message is worse than a general one. Everything
+ * else goes to the shared `ErrorNotice`, which already handles `401`, `403`,
+ * and the unexpected.
+ *
+ * The server is the authority on whether stock remains; this only decides which
+ * sentence to read out. It still offers no way to write the stock off, because
+ * a lifecycle change must never post an inventory movement.
+ */
+function isStockConflict(target: LifecycleStatus | null, error: unknown): boolean {
+  return (
+    target === 'ARCHIVED' &&
+    error instanceof ApiError &&
+    error.status === 409 &&
+    error.code === 'CONFLICT'
   );
 }
 

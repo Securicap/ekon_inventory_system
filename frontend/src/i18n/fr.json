@@ -402,6 +402,7 @@
   "catalog.lifecycleMakeArchived": "Archiver",
   "catalog.lifecycleActiveMeans": "Il est vendu et de nouveau réapprovisionné.",
   "catalog.lifecycleDiscontinuedMeans": "Il ne sera plus réapprovisionné. Le stock restant continue d’être vendu et compté.",
+  "catalog.archiveBlockedByStock": "Impossible d’archiver tant qu’il reste du stock. Retirez ou corrigez le stock restant d’abord — archiver n’efface pas le stock.",
   "catalog.lifecycleArchivedMeans": "Il sort des opérations quotidiennes, son historique reste. Ekon le refuse s’il reste du stock.",
   "home.openCounts": "{count} différences de comptage non résolues",
   "home.openCountsOne": "1 différence de comptage non résolue",

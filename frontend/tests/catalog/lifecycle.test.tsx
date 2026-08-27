@@ -154,6 +154,36 @@ describe('when the server refuses to archive', () => {
     expect(within(dialog()).getAllByRole('alert').length).toBeGreaterThan(0);
   });
 
+  it('says stock remains, not that the merchandise is closed', async () => {
+    // A bare `CONFLICT` means "pick again from a fresh list" on receiving and
+    // removal, and that sentence is wrong here: nothing is closed, there are
+    // units on a shelf. Asserting the alert exists is not enough — the previous
+    // version of this screen showed the wrong one and passed.
+    await openLifecycle(RICE, 'ARCHIVED', {
+      [LIFECYCLE_ROUTE]: apiFailure('CONFLICT', 409),
+    });
+
+    confirm();
+    await settle();
+
+    expect(within(dialog()).getByText(ht['catalog.archiveBlockedByStock'])).toBeInTheDocument();
+    expect(within(dialog()).queryByText(ht['error.resourceInactive'])).toBeNull();
+  });
+
+  it('leaves the other transitions to the shared notice', async () => {
+    // Only archiving is refused for remaining stock. Restoring cannot be, so
+    // the stock sentence would be a confident lie about why it failed.
+    await openLifecycle(RICE, 'DISCONTINUED', {
+      [LIFECYCLE_ROUTE]: apiFailure('CONFLICT', 409),
+    });
+
+    confirm();
+    await settle();
+
+    expect(within(dialog()).queryByText(ht['catalog.archiveBlockedByStock'])).toBeNull();
+    expect(within(dialog()).getAllByRole('alert').length).toBeGreaterThan(0);
+  });
+
   it('offers no way to write the remaining stock off from here', async () => {
     // A lifecycle screen posting an inventory movement is the one thing a
     // lifecycle change must never do. The remedy is to sell or correct the

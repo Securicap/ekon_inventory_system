@@ -402,6 +402,7 @@
   "catalog.lifecycleMakeArchived": "Mete l nan achiv",
   "catalog.lifecycleActiveMeans": "Nou ap vann li epi nou ap kòmande l ankò.",
   "catalog.lifecycleDiscontinuedMeans": "Nou p ap kòmande l ankò. Sa ki nan stòk la ap kontinye vann epi nou ka konte l.",
+  "catalog.archiveBlockedByStock": "Ou pa ka mete l nan achiv toutotan gen stòk ki rete. Retire oswa korije sa ki rete a anvan — mete nan achiv pa efase stòk.",
   "catalog.lifecycleArchivedMeans": "Li sòti nan travay chak jou a men istwa li rete. Ekon p ap kite w fè sa si gen stòk ki rete.",
   "home.openCounts": "{count} diferans nan kont yo poko rezoud",
   "home.openCountsOne": "1 diferans nan kont yo poko rezoud",
