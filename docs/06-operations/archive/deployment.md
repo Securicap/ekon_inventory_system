@@ -1,5 +1,17 @@
 # Deployment
 
+> **Archived — 2026-09-15.** This document described deployment when Ekon was a
+> cloud-hosted service and the shop machine was a browser client. It is not the
+> plan of record any more:
+> [ADR 13](../../07-decisions/0013-local-first-shop-installation.md) supersedes
+> [ADR 2](../../07-decisions/0002-cloud-hosted-not-shop-local.md) and makes
+> **Ekon Local v1** — installed on the shop computer, with a bundled local
+> PostgreSQL 16, both tiers bound to `127.0.0.1`, working with no internet — the
+> production target. Nothing here is followed, and the hosted staging
+> environment it records is gone. It is kept, unedited apart from link paths,
+> because the launch invariant below was genuinely performed against a real
+> hosted environment and that result is part of the project's history.
+
 ## Status
 
 Ekon is deployed to **staging**: the application runs on Northflank, and its
@@ -19,8 +31,8 @@ Sandbox, which is what proved the hosted workflow and not an approved permanent
 production environment.
 
 **Nor is production OR1.** Going live is now defined as the OR1 milestone in
-[retail-domain-and-or1.md](../03-architecture/retail-domain-and-or1.md) and
-[ADR 12](../07-decisions/0012-operational-release-one.md): safe and useful
+[retail-domain-and-or1.md](../../03-architecture/retail-domain-and-or1.md) and
+[ADR 12](../../07-decisions/0012-operational-release-one.md): safe and useful
 enough to become the store's real day-to-day inventory system. The launch
 invariant below is the **tested staging baseline for the operating loop this
 document describes**, and it passed. OR1's acceptance gate is broader — a
@@ -203,7 +215,7 @@ It creates exactly one active `OWNER` and refuses if an active owner already
 exists, so re-running it is safe and cannot produce a second account. Every
 account after this one is created inside the application, in step 7. Reasoning
 and the ways to keep the password out of shell history are in
-[backend/src/modules/identity/README.md](../../backend/src/modules/identity/README.md).
+[backend/src/modules/identity/README.md](../../../backend/src/modules/identity/README.md).
 
 ### 4. Boot the application
 
@@ -355,7 +367,7 @@ inventory. On a managed platform this is provider configuration:
 
 For the self-hosted **OCI candidate** the repository does now carry a
 backup job, a schedule, and a restore drill —
-[`deploy/oci/scripts/`](../../deploy/oci/scripts/), documented in
+[`deploy/archive/oci/scripts/`](../../../deploy/archive/oci/scripts/), documented in
 [oci-zero-cost.md](oci-zero-cost.md). There the backup is not provider
 configuration but part of the deployment, because there is no provider to do it:
 a nightly `pg_dump` to OCI Object Storage, a weekly copy taken off Oracle

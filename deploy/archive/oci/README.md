@@ -1,10 +1,14 @@
-# deploy/oci
+# deploy/archive/oci
+
+> **Archived — 2026-09-15.** Nothing here is deployed, run, or maintained;
+> see [../README.md](../README.md). The text below is left as it was written
+> for the hosted candidate, including its `deploy/oci/` paths.
 
 Everything needed to run Ekon on one OCI Always Free VM: Caddy, the application,
 PostgreSQL, a nightly backup that leaves the machine, and a restore drill that
 proves the backup works.
 
-**The runbook is [docs/06-operations/oci-zero-cost.md](../../docs/06-operations/oci-zero-cost.md).**
+**The runbook is [docs/06-operations/archive/oci-zero-cost.md](../../../docs/06-operations/archive/oci-zero-cost.md).**
 It is the canonical document — provisioning, firewall, block volume, Object
 Storage, recovery, and the acceptance checklist that decides whether this is
 allowed to hold real inventory. This file is only a map of the directory.

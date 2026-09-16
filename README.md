@@ -1,8 +1,10 @@
 # Ekon Inventory System
 
-Inventory system for a small family retail business in Haiti. Store employees
-record stock from a browser on a shared shop laptop; the owner reviews the same
-information remotely from another country.
+Inventory system for a small family retail business in Haiti. It is installed
+on the shop's own computer and used from a browser there: the application and
+its PostgreSQL database both run on that machine, and the shop can record stock
+with no internet connection at all. See
+[ADR 13](docs/07-decisions/0013-local-first-shop-installation.md).
 
 **Status:** Sprint 0 complete. Business capabilities in progress — the `catalog`
 module can create and list stockable products with server-generated SKUs
@@ -91,8 +93,11 @@ rather than being a sales design.
 
 The milestone that direction is aimed at is **OR1**: safe and useful enough to
 become the store's real day-to-day inventory system while development continues.
-Hosted staging has passed its own launch invariant for the loop described above;
-that is a tested baseline for the earlier model and is not OR1.
+OR1 is delivered as **Ekon Local v1** — an installation on the shop computer,
+with a bundled local PostgreSQL 16, both tiers bound to `127.0.0.1`, and no
+internet required to operate. Hosted staging once passed its own launch
+invariant for the loop described above; that was a tested baseline for the
+earlier model on a deployment target that no longer applies, and it is not OR1.
 
 What is unchanged, and is the foundation the rest is built on: the append-only
 movement ledger, balances as a projection, operation-id idempotency,
@@ -100,12 +105,19 @@ server-owned before/after quantities, and immutable generated SKUs.
 
 Read [docs/03-architecture/retail-domain-and-or1.md](docs/03-architecture/retail-domain-and-or1.md)
 before changing the merchandise model. The decisions are
-[ADR 11](docs/07-decisions/0011-retail-merchandise-and-inventory-operations.md)
-and [ADR 12](docs/07-decisions/0012-operational-release-one.md).
+[ADR 11](docs/07-decisions/0011-retail-merchandise-and-inventory-operations.md),
+[ADR 12](docs/07-decisions/0012-operational-release-one.md), and
+[ADR 13](docs/07-decisions/0013-local-first-shop-installation.md).
 
 ---
 
 ## Getting started
+
+**This is the developer setup, and only that.** It runs the two sides in watch
+mode against a Docker PostgreSQL, which is not how a shop runs Ekon — production
+is an installation on the shop computer, described in
+[ADR 13](docs/07-decisions/0013-local-first-shop-installation.md). There is no
+installer yet.
 
 You need [Node.js 22](https://nodejs.org) and Docker. Then:
 
@@ -144,16 +156,21 @@ If something does not work, see [docs/06-operations/local-development.md](docs/0
 ## How the pieces fit together
 
 ```
-  shop laptop (browser)  ─┐
-                          ├──▶  one web service  ──▶  managed PostgreSQL
-  owner abroad (browser) ─┘     Fastify + React
-                                (same origin)
+  the shop computer
+  ┌──────────────────────────────────────────────────────┐
+  │  browser  ──▶  one web service  ──▶  PostgreSQL 16   │
+  │  127.0.0.1     Fastify + React       127.0.0.1:5432  │
+  │                (same origin)         local, bundled  │
+  └──────────────────────────────────────────────────────┘
+        nothing listens outside the machine · no internet needed
 ```
 
-The shop laptop is **a client only**. It runs no server, no database, and no
-installed software beyond a browser. That is what lets the owner review
-inventory from another country without depending on a laptop in Haiti being
-switched on.
+Everything the shop uses is **on the one computer**: the application and the
+database are installed there, both bound to the loopback interface, so an
+outage — of the internet, of any provider — cannot stop somebody recording what
+arrived or what left. Backup and restore are therefore part of the product
+rather than a provider's job. Remote review for the owner, who is in another
+country, is a later milestone; it is not in v1.
 
 | Directory             | Contains                                                                    |
 | --------------------- | --------------------------------------------------------------------------- |
@@ -180,9 +197,8 @@ by review.
 
 **Inventory history is append-only.** `inventory_movements` is never updated or
 deleted — not by a bug, not by a migration, not by a leaked credential. Triggers
-raise on `UPDATE` and `DELETE`, and the application's database role is granted
-only `SELECT` and `INSERT`. A mistake is corrected with a compensating movement,
-never an edit.
+raise on `UPDATE` and `DELETE`. A mistake is corrected with a compensating
+movement, never an edit.
 
 **Every movement records what the quantity was and what it became.** Each row
 carries `quantity_before` and `quantity_after`, with a database CHECK that they
@@ -212,14 +228,16 @@ Full detail: [docs/04-database/invariants.md](docs/04-database/invariants.md).
 
 ---
 
-## Offline
+## Working without internet
 
-Offline operation is a real requirement, and it now sits **after OR1** rather
-than immediately next: the merchandise correction and the OR1 milestone come
-first, because a shop that cannot use the system at all does not benefit from
-being able to use it without internet. Nothing about _how_ offline would work
-has changed. The first release requires connectivity to submit and read data.
-What it does guarantee today:
+Offline was a milestone when the database lived somewhere else. Under
+[ADR 13](docs/07-decisions/0013-local-first-shop-installation.md) the shop's
+data is on the shop's computer, so every workflow already works with the
+connection down and there is nothing to queue against. What is left for a later
+milestone is **synchronization** — a copy the owner can read from abroad — and
+it gets its own decision.
+
+What the software guarantees today, and what a sync milestone would build on:
 
 - connectivity failures are clearly visible, never silent;
 - forms keep what was typed, in `localStorage`, across a failure or a reload;
@@ -228,15 +246,15 @@ What it does guarantee today:
 
 Two things the schema already has make that milestone additive rather than a
 redesign: identifiers are client-generatable UUIDv7, and every write carries a
-retry-stable operation id. Whatever else offline queuing turns out to need will
-be designed from real synchronization requirements when the milestone begins,
-rather than guessed at now and welded into permanent stock history — see
+retry-stable operation id. Whatever else synchronization turns out to need will
+be designed from real requirements when the milestone begins, rather than
+guessed at now and welded into permanent stock history — see
 [ADR 9](docs/07-decisions/0009-user-identity-not-device-identity.md).
 
 One constraint it must respect, recorded now:
 `quantity_before`, `quantity_after`, and `previous_movement_id` are assigned by
-the server at ingestion, never by the client. A queued offline movement carries
-a delta, not a position in the chain.
+the server at ingestion, never by the client. A movement arriving from elsewhere
+carries a delta, not a position in the chain.
 
 ---
 

@@ -823,5 +823,5 @@ what was found, and somebody with the authority explains the difference and lets
 the shop's numbers move — with a correction and a reversal available for the two
 kinds of mistake, and merchandise withdrawn when the shop stops selling it. On
 the same laptop or the same phone, in their own language, with every retry safe.
-Full production deployment is reviewed now that it is — see
-[docs/06-operations/deployment.md](../docs/06-operations/deployment.md).
+Production delivery of that loop is an installation on the shop computer — see
+[ADR 13](../docs/07-decisions/0013-local-first-shop-installation.md).

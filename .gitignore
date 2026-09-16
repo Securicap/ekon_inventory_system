@@ -11,8 +11,10 @@ backend/public/
 .env.*
 !.env.example
 
-# the OCI production candidate's real configuration: database password, domain,
-# backup bucket. `.env.*` above does not match it, so it is named explicitly.
+# the archived hosted candidate's real configuration: database password, domain,
+# backup bucket. `.env.*` above does not match it, so it is named explicitly, and
+# it stays ignored so an old working copy cannot commit one.
+deploy/archive/oci/production.env
 deploy/oci/production.env
 
 # local database / postgres scratch
