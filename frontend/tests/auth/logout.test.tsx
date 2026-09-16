@@ -72,7 +72,10 @@ describe('signing out', () => {
 
     // Nothing the next person to use this laptop could read out of the cache.
     expect(queryClient.getQueryData(['catalog', 'products'])).toBeUndefined();
-    expect(queryClient.getQueryData(['auth', 'me'])).toBeNull();
+    // The auth entry is *set* to "nobody" rather than removed: removing it
+    // would leave the bootstrap query with no data and start a refetch behind
+    // the login screen, asking a question we already know the answer to.
+    expect(queryClient.getQueryData(['auth', 'me'])).toEqual({ status: 'anonymous' });
     expect(screen.queryByText('Diri')).toBeNull();
   });
 

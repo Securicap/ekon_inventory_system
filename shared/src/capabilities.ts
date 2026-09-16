@@ -23,6 +23,13 @@ export const CAPABILITIES = [
   'audit.read',
   'identity.manage',
   'reports.export',
+  /**
+   * Read how the installation itself is doing — its version, its schema, and
+   * whether a backup has run. Not an inventory question and not a catalog one:
+   * it describes the machine the shop depends on, and the answer is useless to
+   * somebody who cannot act on it. See migration 0015.
+   */
+  'system.manage',
 ] as const;
 
 export const capabilitySchema = z.enum(CAPABILITIES);
@@ -40,7 +47,14 @@ export type Capability = z.infer<typeof capabilitySchema>;
 export const DEFAULT_ROLE_CAPABILITIES: Readonly<Record<string, readonly Capability[]>> = {
   SUPER_ADMIN: CAPABILITIES,
   OWNER: CAPABILITIES,
-  MANAGER: CAPABILITIES.filter((c) => c !== 'identity.manage'),
+  /**
+   * Everything except the two that are the owner's alone: managing accounts,
+   * and the state of the installation. A manager runs the shop floor. Whether
+   * last night's backup finished is a question about the business's ability to
+   * survive losing the computer, and the person who answers for that is the
+   * person who owns the records.
+   */
+  MANAGER: CAPABILITIES.filter((c) => c !== 'identity.manage' && c !== 'system.manage'),
   /**
    * An employee reads the catalog, reads stock, books in what arrives, and
    * records what leaves. That is the whole job at the counter, and the last of
@@ -59,9 +73,10 @@ export const DEFAULT_ROLE_CAPABILITIES: Readonly<Record<string, readonly Capabil
    *
    * Everything else is withheld until someone decides otherwise: writing the
    * catalog, deactivating a product, adjusting or counting stock, reversing a
-   * movement, reading the audit log, managing users, exporting reports. Each of
-   * those either changes what the numbers mean or can hide the fact that they
-   * changed.
+   * movement, reading the audit log, managing users, exporting reports, and
+   * reading the state of the installation. Each of those either changes what
+   * the numbers mean, can hide the fact that they changed, or describes a
+   * machine nobody at the counter administers.
    *
    * A shop that wants its employees to run counts grants that later. Starting
    * permissive and tightening afterwards is the wrong direction: by then people

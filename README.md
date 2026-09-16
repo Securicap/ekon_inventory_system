@@ -128,26 +128,43 @@ make setup      # installs dependencies, creates .env, starts Postgres, migrates
 make dev        # backend on :3000, frontend on :5173
 ```
 
-Open <http://localhost:5173>. You will be asked to sign in. A new database has
-no accounts at all — create the first owner once, with
-`npm run identity:create-owner` (see
-[backend/src/modules/identity](backend/src/modules/identity/README.md)), then
-sign in with it. Every account after that one is created from inside the
-application, by somebody holding `identity.manage`: the owner opens **Nouvo
-kont** and gives each employee a username, a name, a password, and a role. The
-landing screen shows a connected database and the schema version.
+Open <http://localhost:5173>. A database with no accounts at all greets you with
+the **first-run setup screen**: choose a username, a name, and a password, and it
+creates the one owner account — the same screen somebody sees after installing
+Ekon on a shop computer, where there is no shell to run a command in. Then sign
+in with what you just chose.
+
+(`npm run identity:create-owner` still does the same thing from a terminal, and
+is how an installation that has lost its owner is recovered. See
+[backend/src/modules/identity](backend/src/modules/identity/README.md).)
+
+Every account after that one is created from inside the application, by somebody
+holding `identity.manage`: the owner opens **Nouvo kont** and gives each employee
+a username, a name, a password, and a role. The landing screen shows a connected
+database and the schema version.
 
 `make help` lists every command.
 
-| Command         | What it does                                               |
-| --------------- | ---------------------------------------------------------- |
-| `make setup`    | One-time setup: dependencies, `.env`, database, migrations |
-| `make dev`      | Run backend and frontend in watch mode                     |
-| `make test`     | Run all tests (needs the database running)                 |
-| `make check`    | Everything CI runs: types, lint, conventions, tests        |
-| `make migrate`  | Apply pending migrations                                   |
-| `make db-reset` | Destroy and rebuild the local database                     |
-| `make build`    | Production build                                           |
+| Command            | What it does                                               |
+| ------------------ | ---------------------------------------------------------- |
+| `make setup`       | One-time setup: dependencies, `.env`, database, migrations |
+| `make dev`         | Run backend and frontend in watch mode                     |
+| `make test`        | Run all tests (needs the database running)                 |
+| `make check`       | Everything CI runs: types, lint, conventions, tests        |
+| `make migrate`     | Apply pending migrations                                   |
+| `make db-app-user` | Create the restricted role the application connects as     |
+| `make db-reset`    | Destroy and rebuild the local database                     |
+| `make build`       | Production build                                           |
+
+`make setup` and `make db-reset` run `db-app-user` for you. A checkout whose
+database predates migration 0014 needs it once: the application connects as a
+role that may only `INSERT` into the ledger, and the tests build the application
+on that same connection.
+
+Operating an installation — migrating, backing up, restoring, diagnostics — is
+`ekon-ctl`, documented in
+[backend/src/cli/README.md](backend/src/cli/README.md). In development the same
+code runs through `npm run ekon-ctl -- <command>`.
 
 If something does not work, see [docs/06-operations/local-development.md](docs/06-operations/local-development.md).
 
@@ -178,13 +195,14 @@ country, is a later milestone; it is not in v1.
 | `backend/`            | Fastify modular monolith; also serves the built frontend                    |
 | `backend/migrations/` | Sequential `.sql` migrations, applied in filename order                     |
 | `frontend/`           | React + TypeScript, built into `backend/public`                             |
+| `backend/src/cli/`    | `ekon-ctl` — migrate, backup, restore, restore drill, diagnostics           |
 | `infrastructure/`     | Local development Docker compose                                            |
 | `scripts/`            | Convention and bundle-budget checks                                         |
 | `docs/`               | Architecture, database, operations, decision records                        |
 
 The backend is a **modular monolith**: one process, one deployment, with
 internal module boundaries that ESLint enforces. Modules are `identity`,
-`catalog`, `inventory`, and `audit`, over a shared `platform` layer. Each module
+`catalog`, `inventory`, `system`, and `audit`, over a shared `platform` layer. Each module
 has a README describing what it owns.
 
 ---
@@ -197,8 +215,10 @@ by review.
 
 **Inventory history is append-only.** `inventory_movements` is never updated or
 deleted — not by a bug, not by a migration, not by a leaked credential. Triggers
-raise on `UPDATE` and `DELETE`. A mistake is corrected with a compensating
-movement, never an edit.
+raise on `UPDATE` and `DELETE`, and the database role the application connects as
+is granted `SELECT, INSERT` on that table and nothing else, so `UPDATE`,
+`DELETE`, and `TRUNCATE` are refused before a trigger is even reached. A mistake
+is corrected with a compensating movement, never an edit.
 
 **Every movement records what the quantity was and what it became.** Each row
 carries `quantity_before` and `quantity_after`, with a database CHECK that they

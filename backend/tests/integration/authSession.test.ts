@@ -80,7 +80,7 @@ beforeAll(async () => {
   db = await createTestDatabase();
   app = await buildApp({
     config: { ...loadConfig(), NODE_ENV: 'test', LOG_LEVEL: 'silent' },
-    pool: db.pool,
+    pool: db.appPool,
     clock,
   });
 });

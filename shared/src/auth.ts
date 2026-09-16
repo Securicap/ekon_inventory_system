@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { capabilitySchema, type Capability } from './capabilities.js';
-import { DISPLAY_NAME_MAX_LENGTH, USERNAME_PATTERN, usernameSchema } from './identity.js';
+import {
+  displayNameSchema,
+  DISPLAY_NAME_MAX_LENGTH,
+  USERNAME_PATTERN,
+  usernameSchema,
+} from './identity.js';
 import { roleSchema } from './roles.js';
 
 /**
@@ -122,6 +127,77 @@ export type AuthenticatedUser = z.infer<typeof authenticatedUserSchema>;
 export const authenticatedUserResponseSchema = z.object({ user: authenticatedUserSchema }).strict();
 
 export type AuthenticatedUserResponse = z.infer<typeof authenticatedUserResponseSchema>;
+
+/**
+ * `GET /api/auth/me` on an installation that has no users at all.
+ *
+ * A brand-new installation cannot answer "who is this" and must not answer
+ * "nobody, sign in" either — there is nobody to sign in as, and a login form is
+ * a dead end for the person standing in front of it. So the one endpoint that
+ * already runs on every page load says which of the two situations this is.
+ *
+ * It is deliberately a *state* and not a user: it carries no id, no name, no
+ * capability, and nothing that could be mistaken for a session. The only thing
+ * it tells an unauthenticated caller is that the users table is empty, which
+ * stops being true the moment the first owner exists and is not a fact worth
+ * hiding from somebody standing at a machine with no accounts on it.
+ */
+export const setupRequiredResponseSchema = z.object({ state: z.literal('setup') }).strict();
+
+export type SetupRequiredResponse = z.infer<typeof setupRequiredResponseSchema>;
+
+/**
+ * Everything `GET /api/auth/me` can answer with a 200: a signed-in person, or
+ * an installation that has not been set up yet. Anything else is a 401.
+ *
+ * A union rather than one widened object, so no client can read a `user` that
+ * was never sent or a `state` that does not apply. The two shapes are strict
+ * and disjoint, and `state` is the discriminator.
+ */
+export const currentUserResponseSchema = z.union([
+  authenticatedUserResponseSchema,
+  setupRequiredResponseSchema,
+]);
+
+export type CurrentUserResponse = z.infer<typeof currentUserResponseSchema>;
+
+/**
+ * `POST /api/setup/owner` — the first owner of a new installation, created from
+ * the screen in front of the person installing it.
+ *
+ * Strict, and exactly three fields. It is a public route on an empty
+ * installation, so anything it accepted beyond these would be something an
+ * anonymous caller could state about the account that will hold every
+ * capability in the system: not a role, not an id, not an active flag, and not
+ * a capability list. The role is `OWNER` because this endpoint creates owners
+ * and creates nothing else.
+ *
+ * The same three fields `npm run identity:create-owner` reads from the
+ * environment, and the same rules — one definition of what a username is, used
+ * by the form, the route, and the command.
+ */
+export const setupOwnerRequestSchema = z
+  .object({
+    username: usernameSchema,
+    displayName: displayNameSchema,
+    password: passwordInputSchema,
+  })
+  .strict();
+
+export type SetupOwnerRequest = z.infer<typeof setupOwnerRequestSchema>;
+
+/**
+ * What a successful setup returns: the owner that now exists, in the same shape
+ * every other user is returned in.
+ *
+ * No cookie and no session. Creating the account does not sign anybody in — the
+ * person types the password they just chose into the ordinary login form, which
+ * is one deliberate step that proves the credential works before anybody
+ * depends on it.
+ */
+export const setupOwnerResponseSchema = z.object({ user: authenticatedUserSchema }).strict();
+
+export type SetupOwnerResponse = z.infer<typeof setupOwnerResponseSchema>;
 
 function isSortedAndUnique(capabilities: readonly Capability[]): boolean {
   for (let index = 1; index < capabilities.length; index += 1) {

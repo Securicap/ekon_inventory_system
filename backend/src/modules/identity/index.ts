@@ -7,6 +7,7 @@ import {
   type AuthServiceDeps,
   type IdentityAuthService,
 } from './authService.js';
+import { createIdentityBootstrapService } from './bootstrapService.js';
 import { installAccessEnforcement } from './enforcement.js';
 import { registerIdentityRoutes } from './routes.js';
 import { createIdentityUserService, type IdentityUserService } from './userService.js';
@@ -36,8 +37,11 @@ import { createIdentityUserService, type IdentityUserService } from './userServi
  * being the first. Neither is a way past enforcement: both are ordinary
  * services, and every route that reaches them was declared and checked.
  *
- * The initial-owner bootstrap is exported but not registered: it has no HTTP
- * surface and is run by an operator command.
+ * The initial-owner bootstrap is both registered and exported. `POST
+ * /api/setup/owner` is how a new installation gets its first owner from the
+ * screen in front of whoever installed it; `npm run identity:create-owner` is
+ * the same service from a shell, and stays because it is how an installation
+ * that lost its owner is recovered.
  *
  * `@fastify/cookie` must be registered on the instance before this, since the
  * enforcement hook reads the session cookie. The application root does that
@@ -55,8 +59,13 @@ export function registerIdentity(
 ): { auth: IdentityAuthService; users: IdentityUserService } {
   const service = createIdentityAuthService(deps);
   const users = createIdentityUserService(deps);
+  // Registered as well as exported now. First-run setup is an HTTP workflow —
+  // the person installing this is standing at a browser, not at a shell — so
+  // the composition root builds the same service the operator command uses and
+  // hands it to the routes.
+  const bootstrap = createIdentityBootstrapService(deps);
   installAccessEnforcement(app, service);
-  registerIdentityRoutes(app, service, users, deps.config.NODE_ENV);
+  registerIdentityRoutes(app, service, users, bootstrap, deps.config);
   return { auth: service, users };
 }
 

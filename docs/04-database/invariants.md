@@ -10,17 +10,40 @@ module that introduces the table.
 
 No row in `inventory_movements` is ever updated or deleted, by any code path.
 
-_Enforcement:_ `BEFORE UPDATE`, `BEFORE DELETE`, and `BEFORE TRUNCATE` triggers
-on `inventory_movements` raising `restrict_violation` (0005).
-`scripts/check-conventions.mjs` also fails the build on
-`UPDATE inventory_movements` or `DELETE FROM inventory_movements` in source.
+_Enforcement:_ three layers, and they catch different failures.
 
-_Planned:_ the application database role granted only `SELECT, INSERT`, with
-migrations run as a separate owner role. A bug, a bad future migration, or a
-leaked application credential must not be able to alter posted history. Still
-outstanding after 0007: the roles that migration introduces are _application_
-roles in a table, unrelated to PostgreSQL roles, and the grant change is an
-operations task of its own.
+`BEFORE UPDATE`, `BEFORE DELETE`, and `BEFORE TRUNCATE` triggers on
+`inventory_movements` raising `restrict_violation` (0005) catch the
+application's own bug, with a message that names the rule.
+
+**The application's database role is granted `SELECT, INSERT` on that table and
+nothing else (0014).** A trigger is a rule the database applies to a statement it
+was willing to run; a grant decides whether the statement may be attempted at
+all. The grant is what catches everything the trigger cannot — a future
+migration written carelessly, a `psql` session opened with the application's
+credentials, an injection that reaches the wire, a leaked connection string —
+and `TRUNCATE` in particular, which does not fire row triggers in every
+configuration anybody should rely on. Migrations run as the database _owner_,
+which is a different connection string from the one the service uses; the owner
+keeps DDL, and the application gets rows.
+
+`scripts/check-conventions.mjs` also fails the build on
+`UPDATE inventory_movements` or `DELETE FROM inventory_movements` in source,
+which is the earliest and cheapest of the three.
+
+_Verified by:_ `backend/tests/integration/applicationRoleMigration.test.ts`,
+which connects as the restricted login role and asserts that the grants on
+`inventory_movements` are exactly `SELECT, INSERT`, that `UPDATE`, `DELETE`, and
+`TRUNCATE` are refused with `42501` before any trigger is reached, and that no
+table in the schema grants `DELETE` or `TRUNCATE` at all. Every other
+integration test builds the application on that same restricted connection, so
+a code path needing a privilege nobody granted fails in CI rather than at a
+counter.
+
+_Not created by the migration:_ the LOGIN user. `ekon_app` is `NOLOGIN` and
+holds the privileges; each environment creates its own login role and puts it in
+`ekon_app` (`make db-app-user` locally, a step in CI, the installer on a shop
+computer). A migration is committed to this repository and a password is not.
 
 ## INV-2 — Corrections are compensating movements
 

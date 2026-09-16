@@ -11,6 +11,13 @@ export const ERROR_CODES = [
   'FORBIDDEN',
   'NOT_FOUND',
   'CONFLICT',
+  /**
+   * First-run owner setup was attempted on an installation that already has a
+   * user. Distinct from `CONFLICT` because the client's remedy is specific and
+   * mechanical — stop offering to create an owner and ask the person to sign in
+   * — and a screen cannot read that out of a generic conflict.
+   */
+  'SETUP_COMPLETE',
   'OPERATION_REPLAYED_WITH_DIFFERENT_BODY',
   'INSUFFICIENT_STOCK',
   'IMMUTABLE_RECORD',
@@ -43,6 +50,7 @@ export const HTTP_STATUS_BY_ERROR_CODE: Readonly<Record<ErrorCode, number>> = {
   FORBIDDEN: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
+  SETUP_COMPLETE: 409,
   OPERATION_REPLAYED_WITH_DIFFERENT_BODY: 409,
   INSUFFICIENT_STOCK: 422,
   IMMUTABLE_RECORD: 422,

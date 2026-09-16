@@ -84,6 +84,24 @@ export async function usernameExists(db: Queryable, username: string): Promise<b
   return rows.length > 0;
 }
 
+/**
+ * True when the `users` table has no rows at all — an installation nobody has
+ * set up yet.
+ *
+ * Deliberately `count = 0` and not "no active owner". Those are different
+ * questions, and first-run setup turns on the stricter one: an installation
+ * with a deactivated owner, or with an employee somebody created and an owner
+ * they deleted, is not a blank machine and must not offer to create an
+ * unauthenticated account on a database that already holds people.
+ *
+ * `LIMIT 1` rather than a real count: the answer is a boolean, and asking the
+ * database to count a table to learn whether it is empty is work nobody reads.
+ */
+export async function usersTableIsEmpty(db: Queryable): Promise<boolean> {
+  const { rows } = await db.query(`SELECT 1 FROM users LIMIT 1`);
+  return rows.length === 0;
+}
+
 /** True when at least one active user holds this role. */
 export async function activeUserWithRoleExists(db: Queryable, role: Role): Promise<boolean> {
   const { rows } = await db.query(`SELECT 1 FROM users WHERE role = $1 AND is_active LIMIT 1`, [

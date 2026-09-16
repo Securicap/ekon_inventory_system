@@ -432,13 +432,19 @@ describe('role capabilities', () => {
     }
   });
 
-  it('gives owners and super admins every capability, and managers all but identity.manage', async () => {
+  it('gives owners and super admins every capability, and managers all but the owner\u2019s two', async () => {
     const mapping = await seededMapping();
     for (const role of ['OWNER', 'SUPER_ADMIN']) {
       expect([...(mapping[role] ?? [])].sort()).toEqual([...CAPABILITIES].sort());
     }
+
+    // A manager runs the shop floor. Managing accounts is the owner's, and so
+    // is the state of the installation: whether last night's backup finished is
+    // a question about surviving the loss of the computer, and the person who
+    // answers for that is the person who owns the records.
     expect(mapping.MANAGER).not.toContain('identity.manage');
-    expect([...(mapping.MANAGER ?? []), 'identity.manage'].sort()).toEqual(
+    expect(mapping.MANAGER).not.toContain('system.manage');
+    expect([...(mapping.MANAGER ?? []), 'identity.manage', 'system.manage'].sort()).toEqual(
       [...CAPABILITIES].sort(),
     );
   });

@@ -15,10 +15,19 @@ services:
       POSTGRES_DB: ekon_dev
       # Match production collation so ordering and citext behave identically.
       POSTGRES_INITDB_ARGS: '--locale-provider=icu --icu-locale=en-US --encoding=UTF8'
+      # The restricted login user the application connects as. Created by the
+      # init script below; see `backend/migrations/0014_application_role.sql`.
+      EKON_RUNTIME_USER: ekon_runtime
+      EKON_RUNTIME_PASSWORD: ekon_runtime
     ports:
-      - '5432:5432'
+      # A developer with another PostgreSQL already on 5432 sets EKON_DB_PORT.
+      # Nothing but the published port changes; the container still listens on
+      # 5432 and `DATABASE_URL` is the only thing that has to agree with it.
+      - '${EKON_DB_PORT:-5432}:5432'
     volumes:
       - ekon-pgdata:/var/lib/postgresql/data
+      # Runs once, on an empty data directory, before anything connects.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ekon -d ekon_dev']
       interval: 5s

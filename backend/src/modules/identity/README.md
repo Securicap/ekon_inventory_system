@@ -94,7 +94,45 @@ authenticated workflows for a later PR, performed by someone holding
 ## Creating the first owner
 
 A new installation has no users, so there is nobody who could be authorized to
-create one. One command answers that, once:
+create one. There are two ways out of that, and they differ in exactly one rule.
+
+### From the browser, on a new installation
+
+`POST /api/setup/owner` — **public**, and refused the moment the `users` table
+has a single row in it.
+
+This is what a shop computer actually uses. Somebody installs Ekon, opens the
+browser, and `GET /api/auth/me` answers `{ state: 'setup' }`; the frontend draws
+the first-run screen, and this route creates the owner. There is no operator with
+a shell on that machine, so a command-line-only bootstrap would mean an
+installation nobody could get into.
+
+What makes a public account-creating route safe is every other line of it:
+
+- it refuses unless `count(*) = 0` on `users`, **re-checked inside the
+  transaction** under `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`. Two
+  browser tabs racing produce exactly one owner and the second gets
+  `409 SETUP_COMPLETE` — the username UNIQUE constraint would not have caught
+  that, because the two owners have different names;
+- it creates an `OWNER` and can create nothing else. The role is not a field, and
+  the strict schema makes a request that states one a `400` naming the field
+  rather than a value quietly ignored;
+- it stops existing, in effect, the moment it succeeds. Every later call is
+  `SETUP_COMPLETE`, and `/me` stops advertising setup;
+- it returns **no cookie**. Creating an account does not sign anybody in: the
+  person types the password they just chose into the ordinary login form, which
+  proves the credential works while they are still standing there. There is no
+  self-service reset and no second account to recover from, so that one extra
+  step is worth more than it costs.
+
+The rule is "no users", not "no active owner", and the difference matters: an
+installation that already holds people — an employee somebody created, an owner
+who was deactivated — is one where creating an account is a signed-in workflow,
+and an unauthenticated route must not reopen on it.
+
+### From a shell, to recover
+
+One command answers the same question for an operator who has the machine:
 
 ```bash
 EKON_OWNER_USERNAME=marie.j \
@@ -103,9 +141,13 @@ EKON_OWNER_PASSWORD='<chosen by the owner>' \
 npm run identity:create-owner
 ```
 
+(`ekon-ctl create-owner` is the same command on an installation.)
+
 It creates exactly one active `OWNER`, and refuses if any required value is
-missing or invalid, if the username is taken, or if an active owner already
-exists. There is no force flag and it cannot create a second account: everyone
+missing or invalid, if the username is taken, or if an **active owner** already
+exists. That is the looser of the two guards on purpose: it is how an
+installation whose owner was deactivated gets a working account back, which the
+public route must never do. There is no force flag and it cannot create a second account: everyone
 after the first owner is created through
 [the signed-in workflow below](#creating-everybody-else), by someone holding
 `identity.manage`. No user and no password is seeded by any migration, so no
@@ -203,14 +245,15 @@ somebody's access and each is its own decision.
 
 ## Signing in
 
-Four routes, and they are the module's whole HTTP surface:
+Five routes, and they are the module's whole HTTP surface:
 
-| Route                      | Access            | Answers                                          |
-| -------------------------- | ----------------- | ------------------------------------------------ |
-| `POST /api/auth/login`     | public            | `200` with the user, and sets the session cookie |
-| `POST /api/auth/logout`    | public            | `204`, always                                    |
-| `GET /api/auth/me`         | authenticated     | `200` with the current user, or `401`            |
-| `POST /api/identity/users` | `identity.manage` | `201` with the created account                   |
+| Route                      | Access            | Answers                                              |
+| -------------------------- | ----------------- | ---------------------------------------------------- |
+| `POST /api/auth/login`     | public            | `200` with the user, and sets the session cookie     |
+| `POST /api/auth/logout`    | public            | `204`, always                                        |
+| `GET /api/auth/me`         | optional          | `200` with the user, `200 {state:'setup'}`, or `401` |
+| `POST /api/setup/owner`    | public            | `201` with the first owner, or `409 SETUP_COMPLETE`  |
+| `POST /api/identity/users` | `identity.manage` | `201` with the created account                       |
 
 `login` takes a username and a password and **nothing else** — no user id, no
 role, no capability list, no session lifetime, no cookie option. The request
@@ -224,6 +267,15 @@ in it, no session id, and no expiry. `/me` does not authenticate for itself: the
 enforcement hook below has already resolved the actor, and the handler returns
 it — one session lookup per request, and one place that decides who is signed
 in.
+
+**`/me` has one more answer, and it only exists on an empty installation.** When
+the `users` table has no rows at all, it returns `200 { "state": "setup" }`
+instead of `401`. That is what puts the first-run screen in front of somebody who
+has just installed Ekon on a shop computer, rather than a login form with no
+account to type into it and nobody who could create one. It is one extra indexed
+query, paid only by callers who turned out to have no session, and only until the
+first user exists. The route therefore declares `auth: 'optional'` — see
+[Enforcement](#enforcement-who-may-call-what).
 
 **A failed sign-in has one answer.** An unknown username, a wrong password, and
 a deactivated account all return `401 UNAUTHENTICATED` with
@@ -344,6 +396,11 @@ A route says what it is, in its own `config`, next to the handler it guards:
 } // no session; nobody is looked up
 {
   config: {
+    auth: 'optional';
+  }
+} // a session is resolved if presented
+{
+  config: {
     auth: 'authenticated';
   }
 } // a valid session, no capability
@@ -353,6 +410,13 @@ A route says what it is, in its own `config`, next to the handler it guards:
   }
 } // a valid session that may do this
 ```
+
+`optional` is `public` in every sense that matters — it grants nothing and
+refuses nobody — and exists so that one route can answer _differently_ to
+somebody who is signed in. There is exactly one: `GET /api/auth/me`, which has to
+tell "nobody is signed in" apart from "this installation has no accounts yet". A
+handler under it reads `request.actor` and handles `null`; `requireActor` is for
+the other two modes. The bar for a second route here is high.
 
 A capability implies authentication, so declaring both is a **startup failure**,
 not a precedence rule — two statements of one fact can disagree, and a rule a
@@ -467,6 +531,10 @@ See [frontend/README.md](../../../../frontend/README.md).
 
 ## Still missing
 
+- **there is no way back from a forgotten owner password** except the operator
+  command on the machine, and it only helps if the owner was deactivated rather
+  than forgotten. The first-run screen asks for the password twice for that
+  reason, and says there is no reset;
 - **account creation is the whole of user management.** There is no listing, no
   search, no editing, no role change, no deactivation, no password change, no
   password-reset workflow, no session listing, and no "sign out everywhere".

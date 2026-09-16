@@ -10,11 +10,12 @@ import { AppError } from '../../platform/http/errors.js';
 /**
  * What a route says about who may call it, and who the caller turned out to be.
  *
- * Every route under `/api/` declares one of three things, in its route
+ * Every route under `/api/` declares one of four things, in its route
  * `config`, next to the handler it guards:
  *
  * ```ts
- * { config: { auth: 'public' } }              // no session needed
+ * { config: { auth: 'public' } }              // no session needed, none read
+ * { config: { auth: 'optional' } }            // a session is read if presented
  * { config: { auth: 'authenticated' } }       // a session, but no capability
  * { config: { capability: 'catalog.write' } } // a session that may do this
  * ```
@@ -35,11 +36,20 @@ declare module 'fastify' {
   interface FastifyContextConfig {
     /**
      * `public` — anyone may call this, and no session is looked up.
+     * `optional` — anyone may call this, and a session *is* resolved when one
+     *   is presented, so the handler can answer differently to somebody who is
+     *   signed in. It grants nothing and refuses nobody.
      * `authenticated` — a valid session is required, but nothing beyond it.
      *
      * Omitted when the route declares a `capability` instead.
+     *
+     * `optional` exists for exactly one endpoint — `GET /api/auth/me`, which
+     * has to distinguish "nobody is signed in" from "this installation has no
+     * accounts at all" — and the bar for a second one is high. It is `public`
+     * in every sense that matters: a handler under it must assume the caller is
+     * a stranger and must not reach `requireActor`.
      */
-    auth?: 'public' | 'authenticated';
+    auth?: 'public' | 'optional' | 'authenticated';
     /**
      * The capability the caller must hold. Implies a valid session.
      *
@@ -67,7 +77,10 @@ declare module 'fastify' {
 
 /** The resolved meaning of a route's declaration. */
 export type RouteAccess =
-  { mode: 'public' } | { mode: 'authenticated' } | { mode: 'capability'; capability: Capability };
+  | { mode: 'public' }
+  | { mode: 'optional' }
+  | { mode: 'authenticated' }
+  | { mode: 'capability'; capability: Capability };
 
 /**
  * A route declaration that cannot be honoured. Thrown while routes are being
@@ -115,12 +128,13 @@ export function resolveRouteAccess(
   }
 
   if (auth !== undefined) {
-    if (auth !== 'public' && auth !== 'authenticated') {
+    if (auth !== 'public' && auth !== 'optional' && auth !== 'authenticated') {
       throw new RouteAccessDeclarationError(
-        `${where} declares auth: '${String(auth)}', which is not 'public' or 'authenticated'.`,
+        `${where} declares auth: '${String(auth)}', which is not 'public', 'optional', or ` +
+          "'authenticated'.",
       );
     }
-    return auth === 'public' ? { mode: 'public' } : { mode: 'authenticated' };
+    return { mode: auth };
   }
 
   if (capability !== undefined) {
@@ -174,8 +188,8 @@ export function assertRouteAccessDeclared(route: {
   if (isApiRoute(route.url)) {
     throw new RouteAccessDeclarationError(
       `${where} declares no access policy. Every route under /api/ must declare exactly one of ` +
-        "config: { auth: 'public' }, config: { auth: 'authenticated' }, or " +
-        "config: { capability: '<capability>' }.",
+        "config: { auth: 'public' }, config: { auth: 'optional' }, " +
+        "config: { auth: 'authenticated' }, or config: { capability: '<capability>' }.",
     );
   }
 }
@@ -184,7 +198,9 @@ export function assertRouteAccessDeclared(route: {
  * The person making this request, for a handler that needs one.
  *
  * Only valid in a handler whose route declared `auth: 'authenticated'` or a
- * capability — for those, the enforcement hook has already refused the request
+ * capability. A route declaring `auth: 'optional'` must read `request.actor`
+ * directly and handle `null`, because for that route `null` is an answer and
+ * not a failure — for those, the enforcement hook has already refused the request
  * if no actor could be resolved, so this cannot legitimately be null. If it is,
  * a route's declaration and its handler disagree about whether anybody is
  * signed in, which is a programming error and is treated as one: a 500 with a

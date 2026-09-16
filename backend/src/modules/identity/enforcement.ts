@@ -81,6 +81,17 @@ export function installAccessEnforcement(app: FastifyInstance, service: Identity
     // capabilities as they are *now*. No SQL is repeated here, and no other
     // module reads the sessions table.
     const actor = await service.authenticate(request.cookies[SESSION_COOKIE_NAME] ?? null);
+
+    // `optional` resolves the session and stops. The handler is answering a
+    // question a stranger is allowed to ask, and `null` is one of the answers
+    // rather than a refusal — so there is exactly one route under this mode and
+    // it is the one that has to tell "nobody is signed in" apart from "this
+    // installation has no accounts yet".
+    if (access.mode === 'optional') {
+      request.actor = actor;
+      return;
+    }
+
     if (!actor) throw unauthenticated();
 
     request.actor = actor;

@@ -40,7 +40,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   app = await buildApp({
     config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-    pool: db.pool,
+    pool: db.appPool,
     clock: fixedClock(new Date('2026-08-03T12:00:00.000Z')),
   });
 });
@@ -110,13 +110,17 @@ describe('an API route that contradicts itself', () => {
   it('cannot declare an auth mode that does not exist', () => {
     expect(() =>
       app.get('/api/typo', { config: { auth: 'authenticated-ish' as never } }, NOOP),
-    ).toThrow(/not 'public' or 'authenticated'/);
+    ).toThrow(/not 'public', 'optional', or 'authenticated'/);
   });
 });
 
 describe('a route that declares itself properly', () => {
-  it('registers as public, authenticated, or capability-protected', () => {
+  it('registers as public, optional, authenticated, or capability-protected', () => {
     expect(() => app.get('/api/ok-public', { config: { auth: 'public' } }, NOOP)).not.toThrow();
+    // `optional` resolves a session when one is presented and refuses nobody.
+    // One route uses it — `GET /api/auth/me`, which has to tell "nobody is
+    // signed in" apart from "this installation has no accounts yet".
+    expect(() => app.get('/api/ok-optional', { config: { auth: 'optional' } }, NOOP)).not.toThrow();
     expect(() =>
       app.get('/api/ok-authenticated', { config: { auth: 'authenticated' } }, NOOP),
     ).not.toThrow();

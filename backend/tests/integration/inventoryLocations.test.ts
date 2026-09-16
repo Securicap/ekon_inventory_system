@@ -123,7 +123,7 @@ describe('GET /api/inventory/locations', () => {
     owner = await createTestSession(db.pool);
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-      pool: db.pool,
+      pool: db.appPool,
       clock: fixedClock(new Date('2026-08-03T12:00:00.000Z')),
     });
     // Extra locations to exercise ordering and inactive visibility.
