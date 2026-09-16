@@ -59,6 +59,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      # The *owner* connection: migrations, and the test suite's own setup.
+      # Tests build the application on a second, restricted connection — see
+      # backend/tests/helpers/testDb.ts and migration 0014.
       DATABASE_URL: postgres://ekon:ekon@localhost:5432/ekon_ci
       NODE_ENV: test
       LOG_LEVEL: silent
@@ -68,11 +71,43 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+
+      - name: PostgreSQL client tools
+        # `pg_dump` and `pg_restore`, matching the server's major version, for
+        # the backup and restore-drill test. The runner image ships a client,
+        # but not necessarily this major version, and pg_dump refuses to dump a
+        # newer server than itself — so the version is pinned rather than
+        # assumed. The test *fails* rather than skipping when they are missing
+        # in CI: a silently skipped backup test is worse than none.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-16
+          pg_dump --version
+
       - run: npm ci
       - run: npm run build --workspace shared
 
       - name: Migrate an empty database to head
         run: npm run migrate
+
+      - name: Create the restricted application login role
+        # `ekon_app` is created by migration 0014 and holds the privileges; it
+        # cannot log in. Every environment creates its own login user and puts
+        # it in that role — a migration is committed to this repository and a
+        # password is not. This is that step for CI, and it mirrors
+        # `make db-app-user` locally and the installer on a shop computer.
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+            DO \$\$
+            BEGIN
+              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ekon_runtime') THEN
+                CREATE ROLE ekon_runtime LOGIN PASSWORD 'ekon_runtime';
+              END IF;
+              GRANT ekon_app TO ekon_runtime;
+            END
+            \$\$;"
+          psql "$DATABASE_URL" -tAc \
+            "SELECT pg_has_role('ekon_runtime', 'ekon_app', 'member')" | grep -qx t
 
       - name: Migrations are idempotent
         # Deploys re-run migrations on every release; a second run must apply

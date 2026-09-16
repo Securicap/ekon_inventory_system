@@ -18,7 +18,7 @@ describe('sessionCookieOptions', () => {
     // httpOnly is the attribute that makes an injected script unable to walk
     // away with a session; SameSite=Lax is what stops another site posting as
     // whoever is signed in.
-    expect(sessionCookieOptions('production')).toMatchObject({
+    expect(sessionCookieOptions(true)).toMatchObject({
       httpOnly: true,
       sameSite: 'lax',
       path: '/',
@@ -28,21 +28,23 @@ describe('sessionCookieOptions', () => {
   it('expires with the session it carries', () => {
     expect(SESSION_ABSOLUTE_LIFETIME_MS).toBe(12 * 60 * 60 * 1000);
     expect(SESSION_COOKIE_MAX_AGE_SECONDS).toBe(43_200);
-    expect(sessionCookieOptions('test').maxAge).toBe(SESSION_ABSOLUTE_LIFETIME_MS / 1000);
+    expect(sessionCookieOptions(false).maxAge).toBe(SESSION_ABSOLUTE_LIFETIME_MS / 1000);
   });
 
-  it('is Secure in production and not in development', () => {
-    // Unconditionally secure would mean no cookie survives plain
-    // http://localhost — and a browser drops it silently rather than saying so.
-    expect(sessionCookieOptions('production').secure).toBe(true);
-    expect(sessionCookieOptions('development').secure).toBe(false);
-    expect(sessionCookieOptions('test').secure).toBe(false);
+  it('takes Secure from configuration rather than from NODE_ENV', () => {
+    // The production target is a browser talking to http://127.0.0.1 on the
+    // same computer (ADR 13), so "production implies TLS" would set Secure on a
+    // cookie the browser then drops — silently, and nobody could sign in.
+    // `SESSION_COOKIE_SECURE` is what decides, and it defaults to true only
+    // under the hosted profile.
+    expect(sessionCookieOptions(true).secure).toBe(true);
+    expect(sessionCookieOptions(false).secure).toBe(false);
   });
 
   it('stays host-only', () => {
     // One origin serves the API and the pages, so there is no second host to
     // share the session with and no subdomain that should inherit it.
-    expect(sessionCookieOptions('production').domain).toBeUndefined();
+    expect(sessionCookieOptions(true).domain).toBeUndefined();
   });
 
   it('does not name what it holds', () => {
@@ -57,9 +59,9 @@ describe('clearSessionCookieOptions', () => {
   it('matches the attributes the cookie was set with', () => {
     // A browser matches a deletion by name, path, and domain. Any difference
     // and the old cookie simply stays where it is.
-    for (const env of ['production', 'development', 'test'] as const) {
-      const set = sessionCookieOptions(env);
-      const cleared = clearSessionCookieOptions(env);
+    for (const secure of [true, false]) {
+      const set = sessionCookieOptions(secure);
+      const cleared = clearSessionCookieOptions(secure);
       expect(cleared.path).toBe(set.path);
       expect(cleared.domain).toBe(set.domain);
       expect(cleared.sameSite).toBe(set.sameSite);
@@ -71,6 +73,6 @@ describe('clearSessionCookieOptions', () => {
   it('carries no max-age of its own', () => {
     // The clearing mechanism supplies an expiry in the past; a lifetime here
     // would fight it.
-    expect(clearSessionCookieOptions('production').maxAge).toBeUndefined();
+    expect(clearSessionCookieOptions(true).maxAge).toBeUndefined();
   });
 });

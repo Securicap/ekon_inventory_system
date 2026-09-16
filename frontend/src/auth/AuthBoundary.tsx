@@ -3,6 +3,7 @@ import { Brand } from '../components/Brand.js';
 import { ErrorNotice } from '../components/ErrorNotice.js';
 import { useTranslator } from '../i18n/index.js';
 import { LoginScreen } from './LoginScreen.js';
+import { SetupOwnerScreen } from './SetupOwnerScreen.js';
 import { useAuth } from './useAuth.js';
 
 /**
@@ -53,6 +54,15 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
           </div>
         </main>
       );
+
+    case 'setup':
+      // Nobody is signed in *and* there is nobody to sign in as: this
+      // installation's database has no users. A login form here would be a
+      // dead end, so the person who just installed Ekon gets the one screen
+      // that can do something about it. It is not routing and not a mode —
+      // the server decides, on every page load, and stops saying `setup` the
+      // moment the first owner exists.
+      return <SetupOwnerScreen />;
 
     case 'unauthenticated':
       return <LoginScreen sessionEnded={state.reason === 'session-ended'} />;

@@ -2,12 +2,16 @@ import type { FastifyInstance } from 'fastify';
 import {
   createUserRequestSchema,
   loginRequestSchema,
+  setupOwnerRequestSchema,
   type AuthenticatedUserResponse,
   type CreateUserResponse,
+  type CurrentUserResponse,
+  type SetupOwnerResponse,
 } from '@ekon/shared';
 import type { Config } from '../../config/index.js';
+import { unauthenticated } from '../../platform/http/errors.js';
 import type { IdentityAuthService } from './authService.js';
-import { requireActor } from './routeAccess.js';
+import type { IdentityBootstrapService } from './bootstrapService.js';
 import {
   clearSessionCookieOptions,
   SESSION_COOKIE_NAME,
@@ -19,14 +23,15 @@ import type { IdentityUserService } from './userService.js';
  * The identity HTTP surface: sign in, sign out, ask who you are, and create an
  * account for somebody else.
  *
- * Login and logout are public — they are how a session is obtained and given
- * up, so requiring one would be circular. `/me` is authenticated-only: it needs
- * a valid session and no particular capability, and the enforcement hook has
- * already resolved the actor by the time its handler runs. Creating a user is
- * the only one that requires a capability, and it requires the module's own:
- * `identity.manage`.
+ * Login, logout, and first-run setup are public — the first two are how a
+ * session is obtained and given up, so requiring one would be circular, and the
+ * third runs on a database with nobody in it. `/me` declares `optional`: it
+ * needs no session, and answers differently depending on whether one was
+ * presented and whether this installation has any accounts at all. Creating a
+ * user is the only one that requires a capability, and it requires the module's
+ * own: `identity.manage`.
  *
- * None of the four carries an operation id. The header exists so that a retried
+ * None of the five carries an operation id. The header exists so that a retried
  * movement is posted once. Signing in is not a ledger command — replaying it
  * should mint a *new* session, not return the earlier one — and neither is
  * creating an account: a replay of that is a duplicate username, which the
@@ -37,8 +42,11 @@ export function registerIdentityRoutes(
   app: FastifyInstance,
   service: IdentityAuthService,
   users: IdentityUserService,
-  nodeEnv: Config['NODE_ENV'],
+  bootstrap: IdentityBootstrapService,
+  config: Pick<Config, 'SESSION_COOKIE_SECURE'>,
 ): void {
+  const cookieSecure = config.SESSION_COOKIE_SECURE;
+
   /**
    * Sign in. The request carries a username and a password and nothing else —
    * no user id, no role, no capability list, no session lifetime, no cookie
@@ -54,7 +62,7 @@ export function registerIdentityRoutes(
     // the browser will not show to JavaScript. It is deliberately not in the
     // body below: a token in JSON is a token in a fetch response, a devtools
     // network pane, and whatever the client decides to keep.
-    void reply.setCookie(SESSION_COOKIE_NAME, rawSessionToken, sessionCookieOptions(nodeEnv));
+    void reply.setCookie(SESSION_COOKIE_NAME, rawSessionToken, sessionCookieOptions(cookieSecure));
 
     const body: AuthenticatedUserResponse = { user };
     return reply.status(200).send(body);
@@ -75,7 +83,7 @@ export function registerIdentityRoutes(
     // Cleared even when nothing was revoked. The browser's copy is the part
     // this route can actually guarantee, and leaving a dead token in it would
     // mean the next request still presents a credential.
-    void reply.clearCookie(SESSION_COOKIE_NAME, clearSessionCookieOptions(nodeEnv));
+    void reply.clearCookie(SESSION_COOKIE_NAME, clearSessionCookieOptions(cookieSecure));
 
     return reply.status(204).send();
   });
@@ -101,9 +109,70 @@ export function registerIdentityRoutes(
    * same answer every protected route gives. The client's next move is the same
    * in every case: sign in.
    */
-  app.get('/api/auth/me', { config: { auth: 'authenticated' } }, async (request, reply) => {
-    const body: AuthenticatedUserResponse = { user: requireActor(request) };
-    return reply.status(200).send(body);
+  app.get('/api/auth/me', { config: { auth: 'optional' } }, async (request, reply) => {
+    if (request.actor) {
+      const body: CurrentUserResponse = { user: request.actor };
+      return reply.status(200).send(body);
+    }
+
+    /**
+     * Nobody is signed in. On an ordinary installation that is a `401` and the
+     * browser shows the login form — but on a machine somebody has just
+     * installed, a login form is a dead end: there is no account to sign in to
+     * and no authenticated caller who could create one.
+     *
+     * So the endpoint the browser already calls on every page load says which
+     * of the two this is. One extra indexed query, paid only by callers who
+     * turned out to have no session, and only until the first user exists.
+     */
+    if (await bootstrap.needsSetup()) {
+      const body: CurrentUserResponse = { state: 'setup' };
+      return reply.status(200).send(body);
+    }
+
+    throw unauthenticated();
+  });
+
+  /**
+   * Create the owner of a brand-new installation, from the screen in front of
+   * the person installing it.
+   *
+   * **Public, and it has to be** — there is nobody to authenticate as on a
+   * database with no users — which is why every other line of it is about
+   * making that safe:
+   *
+   * - it refuses unless the `users` table is **empty**, re-checked inside the
+   *   transaction under `LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE`, so two
+   *   browser tabs racing produce exactly one owner and the second gets a 409;
+   * - it creates an `OWNER` and can create nothing else. The role is not a
+   *   field, and the strict schema means a request that tries to state one is a
+   *   400 rather than a value quietly ignored;
+   * - it stops existing, in effect, the moment it succeeds: from then on every
+   *   call is `SETUP_COMPLETE`, and `GET /api/auth/me` stops advertising setup.
+   *
+   * The operator command (`npm run identity:create-owner`) remains, and remains
+   * the way to recover an installation that lost its owner. This is the same
+   * service with a stricter guard, not a second way to create users.
+   *
+   * `201` with the created owner and **no cookie**: creating the account does
+   * not sign anybody in. The person types the password they just chose into the
+   * ordinary login form, which proves the credential works before the shop
+   * depends on it.
+   */
+  app.post('/api/setup/owner', { config: { auth: 'public' } }, async (request, reply) => {
+    const input = setupOwnerRequestSchema.parse(request.body);
+    const owner = await bootstrap.setUpFirstOwner(input);
+
+    const body: SetupOwnerResponse = {
+      user: {
+        id: owner.id,
+        username: owner.username,
+        displayName: owner.displayName,
+        role: owner.role,
+        capabilities: owner.capabilities,
+      },
+    };
+    return reply.status(201).send(body);
   });
 
   /**

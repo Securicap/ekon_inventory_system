@@ -40,7 +40,7 @@ beforeAll(async () => {
   owner = await createTestSession(db.pool);
   app = await buildApp({
     config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-    pool: db.pool,
+    pool: db.appPool,
     clock: fixedClock(NOW),
   });
   catalog = createCatalogService({ pool: db.pool, clock: fixedClock(NOW) });

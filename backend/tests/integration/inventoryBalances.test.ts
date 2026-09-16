@@ -188,7 +188,7 @@ describe('current stock', () => {
     owner = await createTestSession(db.pool);
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-      pool: db.pool,
+      pool: db.appPool,
       clock: fixedClock(new Date(RECORDED_AT)),
     });
 
@@ -773,7 +773,7 @@ describe('a business with nothing in its catalog', () => {
     owner = await createTestSession(db.pool);
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-      pool: db.pool,
+      pool: db.appPool,
       clock: fixedClock(new Date(RECORDED_AT)),
     });
   });
@@ -810,7 +810,7 @@ describe('a business with no active location', () => {
     owner = await createTestSession(db.pool);
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-      pool: db.pool,
+      pool: db.appPool,
       clock: fixedClock(new Date(RECORDED_AT)),
     });
     await newProduct(db, { name: 'Stock With Nowhere To Sit' });

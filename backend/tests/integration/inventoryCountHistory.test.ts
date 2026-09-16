@@ -168,7 +168,7 @@ beforeAll(async () => {
   clock = { now: () => now };
   app = await buildApp({
     config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-    pool: db.pool,
+    pool: db.appPool,
     clock,
   });
 });

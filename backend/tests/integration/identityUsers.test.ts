@@ -149,7 +149,7 @@ beforeAll(async () => {
   manager = await createTestSession(db.pool, { role: 'MANAGER' });
   app = await buildApp({
     config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-    pool: db.pool,
+    pool: db.appPool,
     clock: fixedClock(NOW),
   });
 });
@@ -515,7 +515,7 @@ describe('what reaches the logs', () => {
     const secret = 'kokoye mango zaboka';
     const noisy = await buildApp({
       config: { ...loadConfig(), NODE_ENV: 'test', LOG_LEVEL: 'trace' },
-      pool: db.pool,
+      pool: db.appPool,
       clock: fixedClock(NOW),
       logDestination: { write: (line) => lines.push(line) },
     });

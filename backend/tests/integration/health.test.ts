@@ -26,7 +26,7 @@ describe('GET /api/health', () => {
     db = await createTestDatabase();
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent', APP_VERSION: 'test-build' },
-      pool: db.pool,
+      pool: db.appPool,
       clock: fixedClock(new Date('2026-08-02T12:00:00.000Z')),
     });
   });

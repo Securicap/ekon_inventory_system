@@ -35,7 +35,7 @@ describe('global HTTP error handling', () => {
     owner = await createTestSession(db.pool);
     app = await buildApp({
       config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-      pool: db.pool,
+      pool: db.appPool,
       clock: fixedClock(new Date('2026-08-03T12:00:00.000Z')),
     });
     // Smallest seam for the unexpected-error path: a test-only route that

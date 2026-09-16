@@ -4,6 +4,7 @@ import { loadConfig } from './config/index.js';
 import { systemClock } from './platform/clock/index.js';
 import { assertSchemaVersion } from './platform/db/migrator.js';
 import { createPool } from './platform/db/pool.js';
+import { waitForDatabase } from './platform/db/readiness.js';
 
 // Must run before any config is read. ESM imports hoist, so this is the
 // first executable statement in the process.
@@ -17,9 +18,21 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const pool = createPool(config);
 
-  // Fail fast on a database that is unreachable or at the wrong schema version.
-  // A half-deployed instance must not accept a single inventory write.
-  await pool.query('SELECT 1');
+  // Wait for the database, then fail fast on one that is at the wrong schema
+  // version. A half-deployed instance must not accept a single inventory write.
+  //
+  // The wait is what makes this survivable as an installed service: the shop
+  // turns the computer on, both services start, and whichever one is ready
+  // first waits for the other rather than exiting. It is bounded, so a
+  // misconfiguration is still a failure and not a process that sits there
+  // forever looking healthy.
+  await waitForDatabase(pool, {
+    timeoutMs: config.DATABASE_WAIT_TIMEOUT_MS,
+    // The application logger does not exist until `buildApp`, and these lines
+    // are the only account of a start that took a minute.
+    log: (message) => process.stdout.write(`${message}\n`),
+  });
+
   if (config.EXPECTED_SCHEMA_VERSION) {
     await assertSchemaVersion(pool, config.EXPECTED_SCHEMA_VERSION);
   }

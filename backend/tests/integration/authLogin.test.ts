@@ -60,7 +60,7 @@ beforeAll(async () => {
   db = await createTestDatabase();
   app = await buildApp({
     config: { ...loadConfig(), NODE_ENV: 'test', LOG_LEVEL: 'silent' },
-    pool: db.pool,
+    pool: db.appPool,
     clock: fixedClock(NOW),
   });
 });
@@ -229,10 +229,14 @@ describe('the session cookie', () => {
     ).not.toMatch(/Secure/i);
   });
 
-  it('is Secure in production', async () => {
+  it('is Secure where the configuration says the origin is', async () => {
+    // Taken from SESSION_COOKIE_SECURE rather than from NODE_ENV, because the
+    // production target is now a browser talking to http://127.0.0.1 on the
+    // same computer (ADR 13) — where a Secure cookie is dropped silently and
+    // nobody could sign in. It is the hosted profile that defaults it to true.
     const production = await buildApp({
-      config: { ...loadConfig(), NODE_ENV: 'production', LOG_LEVEL: 'silent' },
-      pool: db.pool,
+      config: { ...loadConfig(), SESSION_COOKIE_SECURE: true, LOG_LEVEL: 'silent' },
+      pool: db.appPool,
       clock: fixedClock(NOW),
     });
 
@@ -429,7 +433,7 @@ describe('what reaches the logs', () => {
       // Everything the application would ever write, so nothing is missed by
       // being below the threshold.
       config: { ...loadConfig(), NODE_ENV: 'test', LOG_LEVEL: 'trace' },
-      pool: db.pool,
+      pool: db.appPool,
       clock: fixedClock(NOW),
       logDestination: { write: (line) => lines.push(line) },
     });

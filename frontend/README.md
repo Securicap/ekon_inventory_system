@@ -23,11 +23,12 @@ the screens that exist, and sign out.
 
 ```
 src/auth/
-  AuthProvider.tsx     the four-state answer to "who is signed in"
-  AuthBoundary.tsx     loading · login · recoverable error · the shell
+  AuthProvider.tsx     the five-state answer to "who is signed in"
+  AuthBoundary.tsx     loading · setup · login · recoverable error · the shell
   LoginScreen.tsx      username, password, one message for a rejected credential
+  SetupOwnerScreen.tsx the first owner of a brand-new installation
   SignOutButton.tsx    asks the server to revoke, then drops everything
-  authApi.ts           login · logout · getCurrentUser
+  authApi.ts           getCurrentUser · setUpFirstOwner · login · logout
   useProtectedQuery.ts a read that requires a session, and what a 401 means
   capabilities.ts      hasCapability(user, capability)
 ```
@@ -47,13 +48,29 @@ no JWT, and nothing to store. Login and logout carry no operation id: signing in
 is not a ledger command, and replaying it must mint a new session rather than
 return the earlier one.
 
-**Four states, not `user | null`.** `loading`, `authenticated`,
-`unauthenticated`, and a recoverable `error` — because `null` cannot say whether
-we are still asking, and an application that cannot tell those apart flashes a
-shell at somebody who is not signed in, or shows a login form to somebody who
-is. An unreachable server during bootstrap is its own state with a retry button:
-a dropped connection is not evidence that nobody is signed in, and must not
-invite somebody to type a password into it.
+**Five states, not `user | null`.** `loading`, `authenticated`,
+`unauthenticated`, `setup`, and a recoverable `error` — because `null` cannot say
+whether we are still asking, and an application that cannot tell those apart
+flashes a shell at somebody who is not signed in, or shows a login form to
+somebody who is. An unreachable server during bootstrap is its own state with a
+retry button: a dropped connection is not evidence that nobody is signed in, and
+must not invite somebody to type a password into it.
+
+**`setup` is the fifth, and it answers a different question:** not who this is,
+but whether there is anybody at all. `GET /api/auth/me` returns
+`{ state: 'setup' }` when the installation's database has no users, and the
+boundary draws `SetupOwnerScreen` instead of a login form — because on a machine
+somebody has just installed Ekon on, a login form is a dead end: there is no
+account to type into it and no signed-in person who could create one. The screen
+posts three fields to `POST /api/setup/owner` and, on `201`, hands over to the
+login form.
+
+It does **not** sign anybody in, and the server sends no cookie with the `201`.
+That costs one extra step and buys something worth more: the password is proven
+to work, by being typed into the form it will be typed into every morning, while
+the person who chose it is still standing there. There is no self-service reset
+and no second account to recover from — which is also why the form asks for the
+password twice, the only place in this application that does.
 
 **A rejected credential has one message.** An unknown username, a wrong
 password, and a deactivated account are all `401` from the server and all read

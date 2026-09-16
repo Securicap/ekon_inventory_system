@@ -1,5 +1,4 @@
 import type { CookieSerializeOptions } from '@fastify/cookie';
-import type { Config } from '../../config/index.js';
 
 /**
  * How long a session lasts, and the cookie that carries it.
@@ -59,23 +58,28 @@ export const SESSION_COOKIE_NAME = 'ekon_session';
  *   there is no second host to share it with and no subdomain that should
  *   inherit it.
  *
- * `secure` is set only in production, where TLS is terminated in front of the
- * application. Setting it unconditionally would mean no cookie survives plain
- * `http://localhost`, and no injection test — which speaks http — could observe
- * one either; a browser silently drops a `Secure` cookie on an insecure origin
- * rather than reporting anything.
+ * `secure` is passed in, from `SESSION_COOKIE_SECURE`, and is the one attribute
+ * this module does not decide for itself. It is a fact about the origin the
+ * application is served from, which only the configuration knows: `true` behind
+ * a proxy terminating TLS, `false` for an installation a browser reaches at
+ * `http://127.0.0.1` on the same computer (ADR 13).
+ *
+ * It is deliberately no longer derived from `NODE_ENV`. The production target
+ * is now plain HTTP over loopback, so "production implies TLS" would set
+ * `Secure` on a cookie the browser then drops — silently, with no error and no
+ * warning — and nobody in the shop could sign in.
  *
  * The cookie is not signed. Signing protects a value the server needs to trust
  * on sight; this one is trusted only after its hash matches a row, which is a
  * stronger check than a signature and needs no secret to keep.
  */
-export function sessionCookieOptions(nodeEnv: Config['NODE_ENV']): CookieSerializeOptions {
+export function sessionCookieOptions(secure: boolean): CookieSerializeOptions {
   return {
     httpOnly: true,
     sameSite: 'lax',
     path: '/',
     maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,
-    secure: nodeEnv === 'production',
+    secure,
   };
 }
 
@@ -88,7 +92,7 @@ export function sessionCookieOptions(nodeEnv: Config['NODE_ENV']): CookieSeriali
  * that true rather than customary. `maxAge` is dropped: the clearing mechanism
  * supplies its own expiry in the past.
  */
-export function clearSessionCookieOptions(nodeEnv: Config['NODE_ENV']): CookieSerializeOptions {
-  const { maxAge: _maxAge, ...rest } = sessionCookieOptions(nodeEnv);
+export function clearSessionCookieOptions(secure: boolean): CookieSerializeOptions {
+  const { maxAge: _maxAge, ...rest } = sessionCookieOptions(secure);
   return rest;
 }

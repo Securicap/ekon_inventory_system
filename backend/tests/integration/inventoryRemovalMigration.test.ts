@@ -48,6 +48,26 @@ const THROUGH_0007 = [
   '0007_identity.sql',
 ];
 const M0008 = '0008_inventory_stock_removal.sql';
+
+/**
+ * Capabilities added by migrations *after* 0008.
+ *
+ * This suite stops at 0008 on purpose — it is about what that migration did to
+ * a database that already held records — so the vocabulary it should find is
+ * the shared one minus whatever arrived later. Subtracting a named list rather
+ * than freezing a copy of the 0008 vocabulary keeps the assertion honest in
+ * both directions: a capability added without a migration still fails here, and
+ * one added *with* a migration has to be written down.
+ *
+ * Parity for the current head is asserted by
+ * `systemCapabilityMigration.test.ts` and `identityConstraints.test.ts`.
+ */
+const ADDED_AFTER_0008 = ['system.manage'] as const;
+
+/** The shared vocabulary as it stood at 0008. */
+const CAPABILITIES_AT_0008 = CAPABILITIES.filter(
+  (capability) => !ADDED_AFTER_0008.includes(capability as (typeof ADDED_AFTER_0008)[number]),
+);
 const NOW = new Date('2026-08-06T12:00:00.000Z');
 
 const CHECK_VIOLATION = '23514';
@@ -395,9 +415,9 @@ describe('migration 0008 — ordinary stock removal', () => {
     ).rejects.toMatchObject({ code: CHECK_VIOLATION });
   });
 
-  it('names exactly the shared capability vocabulary, inventory.remove included', async () => {
+  it('names exactly the capability vocabulary as it stood at 0008', async () => {
     const inDatabase = await checkConstraintLiterals('role_capabilities_capability_known');
-    expect([...inDatabase].sort()).toEqual([...CAPABILITIES].sort());
+    expect([...inDatabase].sort()).toEqual([...CAPABILITIES_AT_0008].sort());
     expect(inDatabase).toContain('inventory.remove');
   });
 
@@ -422,15 +442,23 @@ describe('migration 0008 — ordinary stock removal', () => {
     }
   });
 
-  it('leaves the seed agreeing with DEFAULT_ROLE_CAPABILITIES exactly', async () => {
-    // The seed is written out by hand across two migrations and the mapping is
+  it('leaves the seed agreeing with DEFAULT_ROLE_CAPABILITIES as it stood at 0008', async () => {
+    // The seed is written out by hand across the migrations and the mapping is
     // written out by hand in `@ekon/shared`, because neither may import the
-    // other. This is what keeps them from drifting.
+    // other. This is what keeps them from drifting — minus the grants later
+    // migrations added, which this database has not applied.
     const mapping: Record<string, string[]> = {};
     for (const row of await grants()) (mapping[row.role] ??= []).push(row.capability);
 
     const expected: Record<string, string[]> = {};
-    for (const role of ROLES) expected[role] = [...(DEFAULT_ROLE_CAPABILITIES[role] ?? [])].sort();
+    for (const role of ROLES) {
+      expected[role] = [...(DEFAULT_ROLE_CAPABILITIES[role] ?? [])]
+        .filter(
+          (capability) =>
+            !ADDED_AFTER_0008.includes(capability as (typeof ADDED_AFTER_0008)[number]),
+        )
+        .sort();
+    }
 
     expect(mapping).toEqual(expected);
   });

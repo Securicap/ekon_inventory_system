@@ -9,6 +9,7 @@ import type { Config } from './config/index.js';
 import { registerCatalog } from './modules/catalog/index.js';
 import { registerIdentity } from './modules/identity/index.js';
 import { createStockPresenceService, registerInventory } from './modules/inventory/index.js';
+import { registerSystem } from './modules/system/index.js';
 import { currentSchemaVersion } from './platform/db/migrator.js';
 import type { DatabasePool } from './platform/db/pool.js';
 import { AppError, isMalformedJsonBodyError } from './platform/http/errors.js';
@@ -72,9 +73,32 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
     },
     genReqId: (req) => (req.headers[REQUEST_ID_HEADER] as string | undefined) ?? newId(),
     requestIdHeader: REQUEST_ID_HEADER,
-    // Managed hosting terminates TLS in front of the app.
-    trustProxy: true,
+    // Believe `X-Forwarded-For` only where something in front of the
+    // application actually sets it. Hosted deployment terminates TLS at a proxy
+    // and rewrites those headers; an installation on the shop computer has no
+    // proxy at all (ADR 13), so a forwarded header there could only have come
+    // from the caller — trusting it would let anybody choose the client address
+    // that lands in the logs, and buy nothing in exchange.
+    trustProxy: config.TRUST_PROXY,
     bodyLimit: 1_048_576,
+  });
+
+  /**
+   * An idle pooled connection failing must not take the process down.
+   *
+   * `pg.Pool` emits `error` when a client sitting in the idle pool breaks —
+   * PostgreSQL restarted, an operator ran `ekon-ctl restore` and terminated
+   * connections before renaming the database, the machine slept. With no
+   * listener, Node turns that into an uncaught exception and the service
+   * exits; on a shop computer that means Ekon is down until somebody notices.
+   *
+   * The pool discards the broken client on its own and opens a fresh one for
+   * the next request, so the right response is to record it and carry on. A
+   * database that is genuinely gone still surfaces — as a failed query, on the
+   * request that needed it, and in `/api/health`.
+   */
+  pool.on('error', (error) => {
+    app.log.error({ err: error }, 'idle database connection failed; it will be replaced');
   });
 
   /**
@@ -239,6 +263,12 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const stock = createStockPresenceService();
   const { catalog } = registerCatalog(app, { pool, clock, stock });
   registerInventory(app, { pool, clock, catalog, identity: identity.users });
+
+  // How the installation itself is doing — build, schema, last backup, free
+  // space. It owns no table and writes nothing; on a computer in a shop with
+  // nobody on site, it is the only way an owner can find out whether their
+  // records are being copied at all.
+  registerSystem(app, { config, pool });
 
   if (serveFrontend) {
     await registerFrontend(app, staticDir);

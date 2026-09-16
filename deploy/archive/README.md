@@ -25,8 +25,9 @@ staging service are all gone — this directory is what remains of that work.
 
 ## What is still live in here
 
-`oci/scripts/backup.sh` and `oci/scripts/restore-drill.sh` are **the basis for
-the cross-platform backup and restore commands built in Phase 1.** They are not
+`oci/scripts/backup.sh` and `oci/scripts/restore-drill.sh` were **the basis for
+`ekon-ctl`**, which now carries their guarantees as product behaviour — see
+[backend/src/cli/README.md](../../backend/src/cli/README.md). They were not
 copied as-is — they are Bash, they shell into Docker, and they upload to Object
 Storage, none of which applies on a shop computer. What carries over is their
 ordering and their guarantees:
@@ -41,4 +42,17 @@ ordering and their guarantees:
   procedure with deliberate steps, not something anybody can run by accident.
 
 ADR 13 makes backup and restore production requirements rather than options, so
-those rules become product behaviour instead of runbook discipline.
+those rules are now product behaviour instead of runbook discipline. What
+`ekon-ctl` changed deliberately:
+
+- **there is a `restore` command.** The archived runbook had none on purpose,
+  because an operator with a runbook was standing next to the VM. Nobody is
+  standing next to a shop computer, so the command exists — and it never drops
+  anything: the live database is renamed and kept until somebody names it to
+  `--discard-previous`;
+- **the drill restores into the same cluster**, not into a disposable container.
+  A shop computer has no Docker, and "will this archive restore into this
+  installation" is the question that actually matters;
+- **nothing uploads.** A copy still has to leave the machine (ADR 13, point 6),
+  but by an operator carrying a drive rather than by credentials for somewhere
+  sitting on the shop computer permanently.

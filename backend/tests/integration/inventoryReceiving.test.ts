@@ -215,7 +215,7 @@ beforeAll(async () => {
   manager = await createTestSession(db.pool, { role: 'MANAGER' });
   app = await buildApp({
     config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-    pool: db.pool,
+    pool: db.appPool,
     // The server clock. Deliberately later than the business time every request
     // states, so the two can never be confused for one another.
     clock: fixedClock(new Date(RECORDED_AT)),

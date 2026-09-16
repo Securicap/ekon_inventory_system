@@ -1,15 +1,21 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useMemo, useState, type ReactNode } from 'react';
 import type { AuthenticatedUser } from '@ekon/shared';
-import { AUTH_ME_QUERY_KEY, getCurrentUser, isAuthQueryKey } from './authApi.js';
+import { AUTH_ME_QUERY_KEY, getCurrentUser, isAuthQueryKey, type CurrentUser } from './authApi.js';
 
 /**
  * The one place the application knows whether anybody is signed in.
  *
- * Four states, not `user | null`. `null` cannot say whether we are still asking
+ * Five states, not `user | null`. `null` cannot say whether we are still asking
  * the server, and an application that cannot tell those apart either flashes
  * protected content at somebody who is not signed in or shows a login form to
  * somebody who is.
+ *
+ * `setup` is the fifth, and it is a different question from the other four:
+ * not "who is this" but "is there anybody at all". An installation whose
+ * database has no users must not show a login form — there is no account to
+ * type into it, and no signed-in person who could create one — so the server
+ * says so on the same call, and this is where that answer becomes a screen.
  *
  * The server session is the source of truth, and it is asked on every page
  * load. Nothing about the user is written to `localStorage`, `sessionStorage`,
@@ -21,6 +27,7 @@ import { AUTH_ME_QUERY_KEY, getCurrentUser, isAuthQueryKey } from './authApi.js'
 export type AuthState =
   | { status: 'loading' }
   | { status: 'authenticated'; user: AuthenticatedUser }
+  | { status: 'setup' }
   | { status: 'unauthenticated'; reason: UnauthenticatedReason }
   | { status: 'error'; error: unknown };
 
@@ -41,6 +48,11 @@ export interface AuthContextValue {
   completeSignIn: (user: AuthenticatedUser) => void;
   /** The server confirmed the session is revoked. Drop everything it opened. */
   completeSignOut: () => void;
+  /**
+   * The first owner now exists. There is somebody to sign in as, so the
+   * installation leaves first-run and shows the ordinary login form.
+   */
+  completeSetup: () => void;
   /** A protected request was refused as unauthenticated: the session ended. */
   reportSessionEnded: () => void;
   /** Ask the server again after the bootstrap failed to reach it. */
@@ -68,8 +80,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refetchOnReconnect: false,
     /**
      * No automatic retry, deliberately, and against the read policy the rest of
-     * the application uses. A 401 is not an error here at all — it is `null`
-     * data — so nothing retries it. What is left is an unreachable server, and
+     * the application uses. A 401 is not an error here at all — it is one of
+     * the answers, carried as data — so nothing retries it. What is left is an unreachable server, and
      * this is the first thing on the screen: a chain of backed-off retries
      * makes the application look frozen to somebody who is standing there and
      * can press a button. They get an honest message and that button.
@@ -88,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (next: Exclude<UnauthenticatedReason, 'never-signed-in'>) => {
       setReason(next);
       queryClient.removeQueries({ predicate: (query) => !isAuthQueryKey(query.queryKey) });
-      queryClient.setQueryData(AUTH_ME_QUERY_KEY, null);
+      queryClient.setQueryData<CurrentUser>(AUTH_ME_QUERY_KEY, { status: 'anonymous' });
     },
     [queryClient],
   );
@@ -98,18 +110,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // The login response is the same shape `/me` returns, so it is the
       // bootstrap answer — no second round trip to learn what we were just
       // told.
-      queryClient.setQueryData(AUTH_ME_QUERY_KEY, user);
+      const signedIn: CurrentUser = { status: 'authenticated', user };
+      queryClient.setQueryData<CurrentUser>(AUTH_ME_QUERY_KEY, signedIn);
     },
     [queryClient],
   );
 
   const completeSignOut = useCallback(() => endSession('signed-out'), [endSession]);
 
+  /**
+   * Setup succeeded. The owner exists and is **not** signed in — creating an
+   * account and holding a session are different things, and the route
+   * deliberately returns no cookie — so this moves to the login form with the
+   * first-visit wording. `never-signed-in` rather than `signed-out`: nobody's
+   * session ended, and telling somebody their session expired thirty seconds
+   * after they installed the product would be a lie.
+   */
+  const completeSetup = useCallback(() => {
+    queryClient.setQueryData<CurrentUser>(AUTH_ME_QUERY_KEY, { status: 'anonymous' });
+  }, [queryClient]);
+
   const reportSessionEnded = useCallback(() => {
     // Only meaningful while somebody is signed in. A 401 arriving after the
     // login screen is already up would otherwise re-announce an ended session
     // to somebody who is trying to start a new one.
-    if (queryClient.getQueryData(AUTH_ME_QUERY_KEY) == null) return;
+    if (queryClient.getQueryData<CurrentUser>(AUTH_ME_QUERY_KEY)?.status !== 'authenticated') {
+      return;
+    }
     endSession('session-ended');
   }, [endSession, queryClient]);
 
@@ -122,14 +149,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // status at `error` while it is in flight, and that is still waiting.
     if (me.isPending || (me.isError && me.isFetching)) return { status: 'loading' };
     if (me.isError) return { status: 'error', error: me.error };
-    return me.data
-      ? { status: 'authenticated', user: me.data }
-      : { status: 'unauthenticated', reason };
+    if (me.data?.status === 'authenticated') return { status: 'authenticated', user: me.data.user };
+    if (me.data?.status === 'setup') return { status: 'setup' };
+    return { status: 'unauthenticated', reason };
   }, [me.isPending, me.isError, me.isFetching, me.error, me.data, reason]);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ state, completeSignIn, completeSignOut, reportSessionEnded, retryBootstrap }),
-    [state, completeSignIn, completeSignOut, reportSessionEnded, retryBootstrap],
+    () => ({
+      state,
+      completeSignIn,
+      completeSignOut,
+      completeSetup,
+      reportSessionEnded,
+      retryBootstrap,
+    }),
+    [state, completeSignIn, completeSignOut, completeSetup, reportSessionEnded, retryBootstrap],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

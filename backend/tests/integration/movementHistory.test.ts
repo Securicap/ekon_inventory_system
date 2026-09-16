@@ -203,7 +203,7 @@ beforeAll(async () => {
   employee = await createTestSession(db.pool, { role: 'EMPLOYEE' });
   app = await buildApp({
     config: { ...loadConfig(), LOG_LEVEL: 'silent' },
-    pool: db.pool,
+    pool: db.appPool,
     clock: fixedClock(NOW),
   });
 });
