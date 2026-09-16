@@ -218,19 +218,39 @@ describe('the stock screen', () => {
     expect(page).not.toMatch(/movement|operation|ledger|hash|RECEIPT|signature/i);
   });
 
-  it('does not turn a row into a control that does nothing', async () => {
-    // There is no adjust, no removal, and no history here. A row that looked
-    // clickable would be promising one — and reading stock does not imply
-    // permission to change it.
+  it('offers only the ways onward the capabilities allow', async () => {
+    // Reading stock does not imply permission to change it. On
+    // `inventory.read` alone the row offers exactly one thing — this item's
+    // history, which is a read behind the same capability — and neither Count
+    // nor Correct appears at all. Not disabled: absent.
     await openStock({ [BALANCES_ROUTE]: json([RICE]) });
 
     const rice = stockRecord('Diri');
-    expect(within(rice).queryAllByRole('button')).toEqual([]);
+    expect(
+      within(rice)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual([ht['stock.actionHistory']]);
+    expect(within(rice).queryByRole('button', { name: ht['stock.actionCount'] })).toBeNull();
+    expect(within(rice).queryByRole('button', { name: ht['stock.actionAdjust'] })).toBeNull();
+    // And the row itself is still not a control: no link, no checkbox, no
+    // editable number, and nothing in it that a click on the row would do.
     expect(within(rice).queryAllByRole('link')).toEqual([]);
     expect(within(rice).queryAllByRole('checkbox')).toEqual([]);
     expect(within(rice).queryAllByRole('textbox')).toEqual([]);
-    // And nothing in it takes focus, because there is nothing in it to do.
-    expect(rice.querySelectorAll('[tabindex]')).toHaveLength(0);
+  });
+
+  it('offers counting and correcting to somebody who may do them', async () => {
+    await openStock(
+      { [BALANCES_ROUTE]: json([RICE]) },
+      { capabilities: ['inventory.read', 'inventory.count', 'inventory.adjust'] },
+    );
+
+    expect(
+      within(stockRecord('Diri'))
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual([ht['stock.actionHistory'], ht['stock.actionCount'], ht['stock.actionAdjust']]);
   });
 
   it('offers no way into receiving or removal from a screen that only reads', async () => {
@@ -304,7 +324,11 @@ describe('a business with no active location', () => {
 });
 
 /** The Total cell of one row, addressed as the last cell rather than by its text. */
+/**
+ * The total, which is the second-to-last cell: the row ends with the ways
+ * onward, and those are not a fact about the stock.
+ */
 function totalOf(productName: string): string {
   const cells = within(stockRecord(productName)).getAllByRole('cell');
-  return cells[cells.length - 1]?.textContent ?? '';
+  return cells[cells.length - 2]?.textContent ?? '';
 }

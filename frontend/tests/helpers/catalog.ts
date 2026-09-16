@@ -2,7 +2,7 @@ import { fireEvent, screen } from '@testing-library/react';
 import type { Capability } from '@ekon/shared';
 import ht from '../../src/i18n/ht.json';
 import { json, mockApi, type FetchMock, type Responder } from './fetchMock.js';
-import { productFixture, userFixture, userResponse } from './fixtures.js';
+import { metadataFixture, productFixture, userFixture, userResponse } from './fixtures.js';
 import { renderApp, settle } from './renderApp.js';
 
 /**
@@ -16,6 +16,7 @@ import { renderApp, settle } from './renderApp.js';
 
 export const CREATE_PRODUCT_ROUTE = 'POST /api/catalog/products';
 export const CATALOG_ROUTE = 'GET /api/catalog/products';
+export const METADATA_ROUTE = 'GET /api/catalog/metadata';
 
 /** What somebody who may both read and write the catalog holds. */
 export const CATALOG_WRITER: readonly Capability[] = ['catalog.read', 'catalog.write'];
@@ -40,6 +41,10 @@ export async function openCatalog(
       userResponse(userFixture({ capabilities: options.capabilities ?? CATALOG_WRITER })),
     ),
     [CATALOG_ROUTE]: json([]),
+    // The form reads the catalog's vocabulary to build its attribute list; a
+    // test that opens the form without it would be testing a form with nothing
+    // to choose from.
+    [METADATA_ROUTE]: json(metadataFixture()),
     ...routes,
   });
 
@@ -60,6 +65,10 @@ export async function openNewProduct(
   const api = await openCatalog(routes, options);
   fireEvent.click(screen.getByRole('button', { name: ht['catalog.newProduct'] }));
   await screen.findByRole('heading', { name: ht['catalog.newProductTitle'] });
+  // The vocabulary is read when the form opens, and the attribute list is built
+  // from it — so a test that started typing before it arrived would be filling
+  // in a form with nothing to choose from.
+  await settle();
   return api;
 }
 
@@ -74,7 +83,14 @@ export function fillNewProductForm(values: { name?: string; description?: string
   }
 }
 
-/** Adds an attribute row to a variant and fills it in, by position. */
+/**
+ * Adds an attribute row to a variant and fills it in, by position.
+ *
+ * The name is **selected**, not typed: attribute names are structure, the
+ * catalog refuses one it has never heard of, and the form offers the vocabulary
+ * rather than a text box. Passing a name the metadata does not define leaves
+ * the select empty, which is exactly what should happen.
+ */
 export function addAttribute(
   variantIndex: number,
   attribute: { name: string; value: string },
@@ -88,6 +104,21 @@ export function addAttribute(
 
   fireEvent.change(names[position]!, { target: { value: attribute.name } });
   fireEvent.change(valuesFields[position]!, { target: { value: attribute.value } });
+}
+
+/** Fills one variant's price or cost: an amount and a currency, which are one fact. */
+export function fillMoney(
+  field: 'price' | 'cost',
+  money: { amount: string; currency: string },
+  variantIndex = 0,
+): void {
+  const label = field === 'price' ? ht['catalog.price'] : ht['catalog.cost'];
+  fireEvent.change(screen.getAllByLabelText(label)[variantIndex]!, {
+    target: { value: money.amount },
+  });
+  fireEvent.change(screen.getAllByLabelText(ht['catalog.currency'])[variantIndex]!, {
+    target: { value: money.currency },
+  });
 }
 
 export function addVariant(): void {

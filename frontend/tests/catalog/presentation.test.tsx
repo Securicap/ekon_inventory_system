@@ -1,237 +1,213 @@
 import { fireEvent, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import ht from '../../src/i18n/ht.json';
-import { json } from '../helpers/fetchMock.js';
-import { productFixture } from '../helpers/fixtures.js';
-import { CATALOG_ROUTE, CATALOG_WRITER, openCatalog, openNewProduct } from '../helpers/catalog.js';
-import { mockApi } from '../helpers/fetchMock.js';
-import { userFixture, userResponse } from '../helpers/fixtures.js';
+import { json, mockApi } from '../helpers/fetchMock.js';
+import { productFixture, userFixture, userResponse } from '../helpers/fixtures.js';
+import { CATALOG_ROUTE, CATALOG_WRITER, openCatalog } from '../helpers/catalog.js';
 import { renderApp, settle } from '../helpers/renderApp.js';
 import { viewport } from '../helpers/viewport.js';
 
 /**
- * The catalog as somebody reaches it on a phone: through the More sheet, since
- * Products is not one of the everyday destinations the bottom bar carries.
- * Deliberately the real route rather than a shortcut past the shell.
+ * Products, as merchandise.
+ *
+ * The thing being protected here is the distinction a person was confused by:
+ * **Products is not Inventory**. This screen carries brand, name,
+ * classification, the variants underneath and what each one is worth — and it
+ * carries no quantity, no location and no total, because a product exists
+ * whether or not any is on a shelf.
+ *
+ * The old register-style table is gone with it. A flat three-column table
+ * repeated the brand and the classification on every row and still did not
+ * group them; a card per product with its variants under it is the shape the
+ * merchandise model actually has.
  */
-async function openCatalogOnPhone(products: unknown[]): Promise<void> {
-  viewport('mobile');
-  mockApi({
-    'GET /api/auth/me': json(userResponse(userFixture({ capabilities: CATALOG_WRITER }))),
-    [CATALOG_ROUTE]: json(products),
-  });
-  renderApp();
-  await screen.findByRole('button', { name: ht['nav.more'] });
-  fireEvent.click(screen.getByRole('button', { name: ht['nav.more'] }));
-  fireEvent.click(
-    within(screen.getByRole('dialog')).getByRole('button', { name: ht['nav.products'] }),
-  );
-  await screen.findByRole('heading', { name: ht['catalog.title'] });
-  await settle();
-}
 
-const COCA = productFixture({
-  id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a02',
-  name: 'Coca-Cola',
-  sku: 'EKN-V2WTX95A',
-  attributes: [{ name: 'volim', value: '500 ml' }],
+const BEL_AMI = productFixture({
+  name: 'Bel Ami',
+  sku: 'EKN-AB12CD34',
+  brand: { id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4b01', name: 'Steve Madden' },
+  classifications: [
+    { dimension: 'audience', dimensionName: 'Audience', value: 'Fanm' },
+    { dimension: 'category', dimensionName: 'Category', value: 'Soulye' },
+  ],
+  attributes: [
+    { name: 'color', value: 'Nwa' },
+    { name: 'size', value: '38' },
+  ],
+  sellingPrice: { amountMinor: 750000, currency: 'HTG' },
+  referenceCost: { amountMinor: 40000, currency: 'USD' },
+  barcodes: ['0123456789012'],
 });
 
-/** One product carrying two variants, which is the grouping worth proving. */
-const RICE = {
-  ...productFixture({ name: 'Diri', sku: 'EKN-AB12CD34' }),
-  variants: [
-    ...productFixture({
-      name: 'Diri',
-      sku: 'EKN-AB12CD34',
-      attributes: [{ name: 'gwosè', value: '5 mamit' }],
-    }).variants,
-    ...productFixture({
-      id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a03',
-      name: 'Diri',
-      sku: 'EKN-QR90ST12',
-      attributes: [{ name: 'gwosè', value: '25 liv' }],
-    }).variants,
-  ],
-};
-
-/** A product sold one way: one variant, no attributes. */
-const OIL = productFixture({
+/** Merchandise nobody has completed: no brand, nothing classified, no price. */
+const PLAIN = productFixture({
   id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a04',
   name: 'Lwil',
-  sku: 'EKN-EF56GH78',
+  sku: 'EKN-Z9Y8X7W6',
 });
 
-const SHELF = [COCA, RICE, OIL];
+function card(name: string): HTMLElement {
+  return screen.getByRole('heading', { name }).closest('article') as HTMLElement;
+}
 
-/**
- * How the catalog reads.
- *
- * The thing being protected is the hierarchy: a product is named once and its
- * variants hang under it, so somebody scanning the page can tell that two SKUs
- * belong to one product rather than to two. On a desktop that is a table with a
- * row-group header; on a phone it is a nested list. Both must say the same
- * thing, and neither may invent a column the API has no field for.
- */
-describe('the catalog register', () => {
-  it('is a real table, with a column for the product, the variant, and the SKU', async () => {
-    await openCatalog({ [CATALOG_ROUTE]: json(SHELF) });
+describe('merchandise identity', () => {
+  it('reads brand, then product, then how it is classified', async () => {
+    await openCatalog({ [CATALOG_ROUTE]: json([BEL_AMI]) });
 
-    const table = screen.getByRole('table');
-    expect(
-      within(table)
-        .getAllByRole('columnheader')
-        .map((cell) => cell.textContent),
-    ).toEqual([ht['catalog.columnProduct'], ht['catalog.columnVariant'], ht['catalog.sku']]);
+    const product = card('Bel Ami');
+    expect(within(product).getByText('Steve Madden')).toBeInTheDocument();
+    // The classification as one line in the catalog's own order, not three
+    // labelled fields — it identifies merchandise, it is not a form.
+    expect(within(product).getByText('Fanm · Soulye')).toBeInTheDocument();
   });
 
-  it('names a product once and hangs both of its variants under it', async () => {
-    await openCatalog({ [CATALOG_ROUTE]: json(SHELF) });
+  it('shows each variant with its attributes, its SKU, and what it is worth', async () => {
+    await openCatalog({ [CATALOG_ROUTE]: json([BEL_AMI]) });
 
-    // One row-group header per product, not one per variant: this is what says
-    // the two rice SKUs are one product.
-    const grouped = screen
-      .getAllByRole('rowheader')
-      .map((header) => [header.textContent, header.getAttribute('rowspan')]);
-    expect(grouped).toEqual([
-      ['Coca-Cola', '1'],
-      ['Diri', '2'],
-      ['Lwil', '1'],
-    ]);
+    const product = card('Bel Ami');
+    expect(within(product).getByText('color: Nwa, size: 38')).toBeInTheDocument();
+    expect(within(product).getByText('EKN-AB12CD34')).toBeInTheDocument();
+    // Minor units, formatted with the currency code — never a bare number, and
+    // never a symbol: this shop buys in one currency and sells in another.
+    // `Intl` separates the thousands and the currency code with no-break
+    // spaces; the query's own normalization is what makes these read as typed.
+    expect(within(product).getByText('7 500,00 HTG')).toBeInTheDocument();
+    // Cost carries its label into the sentence — a second figure beside a price
+    // is read as profit if nothing says what it is (INV-17).
+    expect(within(product).getByText(`${ht['catalog.cost']} 400,00 USD`)).toBeInTheDocument();
+    expect(within(product).getByText('0123456789012')).toBeInTheDocument();
   });
 
-  it('shows every variant and every generated SKU', async () => {
-    await openCatalog({ [CATALOG_ROUTE]: json(SHELF) });
+  it('says a price is absent rather than showing a zero', async () => {
+    // `null` means nobody has established one. A zero would mean the item is
+    // free, and somebody would eventually compute a margin from it.
+    await openCatalog({ [CATALOG_ROUTE]: json([PLAIN]) });
 
-    for (const sku of ['EKN-V2WTX95A', 'EKN-AB12CD34', 'EKN-QR90ST12', 'EKN-EF56GH78']) {
-      expect(screen.getByText(sku)).toBeInTheDocument();
-    }
-    expect(screen.getByText('volim: 500 ml')).toBeInTheDocument();
-    expect(screen.getByText('gwosè: 5 mamit')).toBeInTheDocument();
-    expect(screen.getByText('gwosè: 25 liv')).toBeInTheDocument();
+    expect(within(card('Lwil')).getByText(ht['catalog.noPrice'])).toBeInTheDocument();
+    expect(within(card('Lwil')).queryByText('0,00')).toBeNull();
   });
 
-  it('says a variant has no attributes rather than leaving the cell blank', async () => {
-    await openCatalog({ [CATALOG_ROUTE]: json([OIL]) });
-    expect(screen.getByText(ht['catalog.noAttributes'])).toBeInTheDocument();
+  it('groups a product with several variants under one name', async () => {
+    const twoSizes = {
+      ...BEL_AMI,
+      variants: [
+        ...BEL_AMI.variants,
+        {
+          ...BEL_AMI.variants[0]!,
+          id: '0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4aff',
+          sku: 'EKN-QR90ST12',
+          attributes: [
+            { name: 'color', value: 'Nwa' },
+            { name: 'size', value: '39' },
+          ],
+        },
+      ],
+    };
+    await openCatalog({ [CATALOG_ROUTE]: json([twoSizes]) });
+
+    // One heading, two SKUs under it: the product is named once.
+    expect(screen.getAllByRole('heading', { name: 'Bel Ami' })).toHaveLength(1);
+    const product = card('Bel Ami');
+    expect(within(product).getByText('EKN-AB12CD34')).toBeInTheDocument();
+    expect(within(product).getByText('EKN-QR90ST12')).toBeInTheDocument();
   });
 
-  it('counts what actually arrived, in the singular when there is one of it', async () => {
-    await openCatalog({ [CATALOG_ROUTE]: json([OIL]) });
+  it('carries no quantity, no location and no total anywhere', async () => {
+    // The whole distinction from Inventory, asserted rather than described. A
+    // stock figure on this screen would put the two back together.
+    await openCatalog({ [CATALOG_ROUTE]: json([BEL_AMI, PLAIN]) });
 
-    expect(
-      screen.getByText(new RegExp(`^${ht['catalog.countProductsOne'].replace('{count}', '1')}`)),
-    ).toBeInTheDocument();
-  });
-
-  it('counts them in the plural when there are several', async () => {
-    await openCatalog({ [CATALOG_ROUTE]: json(SHELF) });
-
-    const subtitle = screen.getByText(new RegExp(ht['catalog.skuFromServer']));
-    // Three products, four variants — read off the response, not from anywhere
-    // else, and no other figure appears on the screen.
-    expect(subtitle).toHaveTextContent(ht['catalog.countProducts'].replace('{count}', '3'));
-    expect(subtitle).toHaveTextContent(ht['catalog.countVariants'].replace('{count}', '4'));
-  });
-
-  it('offers no column the catalog has no field for', async () => {
-    await openCatalog({ [CATALOG_ROUTE]: json(SHELF) });
-
-    // Three columns, and the row cells to match. A price, a cost, or a stock
-    // figure would have to appear here first.
-    expect(screen.getAllByRole('columnheader')).toHaveLength(3);
-    expect(within(screen.getAllByRole('row')[1]!).getAllByRole('cell')).toHaveLength(2);
-  });
-});
-
-describe('the catalog on a phone', () => {
-  it('keeps product, variant, and SKU nested rather than scrolling sideways', async () => {
-    await openCatalogOnPhone(SHELF);
-
-    // No table at this width — the same facts, carried by nesting.
+    expect(screen.queryByText(ht['stock.total'])).toBeNull();
+    expect(screen.queryByText(ht['stock.columnLocations'])).toBeNull();
     expect(screen.queryByRole('table')).toBeNull();
-
-    const rice = screen.getByRole('heading', { name: 'Diri' });
-    const record = rice.parentElement!;
-    expect(within(record).getByText('gwosè: 5 mamit')).toBeInTheDocument();
-    expect(within(record).getByText('EKN-AB12CD34')).toBeInTheDocument();
-    expect(within(record).getByText('gwosè: 25 liv')).toBeInTheDocument();
-    expect(within(record).getByText('EKN-QR90ST12')).toBeInTheDocument();
-
-    // And a variant of one product never lands inside another's record.
-    expect(within(record).queryByText('EKN-V2WTX95A')).toBeNull();
-  });
-
-  it('shows every product it was given', async () => {
-    await openCatalogOnPhone(SHELF);
-
-    for (const name of ['Coca-Cola', 'Diri', 'Lwil']) {
-      expect(screen.getByRole('heading', { name })).toBeInTheDocument();
-    }
   });
 });
 
-describe('an empty catalog', () => {
-  it('points somebody who may create a product at the way to do it', async () => {
-    await openCatalog({ [CATALOG_ROUTE]: json([]) });
+describe('lifecycle on the merchandise', () => {
+  it('marks merchandise that is no longer restocked, and leaves active alone', async () => {
+    // Active wears no chip: a column of "Active" is a column nobody reads, and
+    // it makes the two states worth noticing harder to see.
+    await openCatalog({
+      [CATALOG_ROUTE]: json([{ ...PLAIN, lifecycleStatus: 'DISCONTINUED' }, BEL_AMI]),
+    });
 
-    expect(screen.getByText(ht['catalog.empty'])).toBeInTheDocument();
-    expect(screen.getByText(ht['catalog.emptyHint'])).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: ht['catalog.newProduct'] })).toBeInTheDocument();
+    expect(within(card('Lwil')).getByText(ht['catalog.lifecycleDiscontinued'])).toBeInTheDocument();
+    expect(within(card('Bel Ami')).queryByText(ht['catalog.lifecycleActive'])).toBeNull();
   });
 
-  it('does not send somebody who may not create one to a button they do not have', async () => {
-    await openCatalog({ [CATALOG_ROUTE]: json([]) }, { capabilities: ['catalog.read'] });
+  it('marks an archived variant under a product that is still active', async () => {
+    await openCatalog({
+      [CATALOG_ROUTE]: json([
+        {
+          ...PLAIN,
+          variants: [{ ...PLAIN.variants[0]!, lifecycleStatus: 'ARCHIVED' }],
+        },
+      ]),
+    });
 
-    expect(screen.getByText(ht['catalog.empty'])).toBeInTheDocument();
-    expect(screen.queryByText(ht['catalog.emptyHint'])).toBeNull();
-    expect(screen.queryByRole('button', { name: ht['catalog.newProduct'] })).toBeNull();
+    expect(within(card('Lwil')).getByText(ht['catalog.lifecycleArchived'])).toBeInTheDocument();
+  });
+
+  it('offers no lifecycle control without catalog.deactivate', async () => {
+    // Entering merchandise and withdrawing it are different authorities.
+    await openCatalog({ [CATALOG_ROUTE]: json([BEL_AMI]) }, { capabilities: CATALOG_WRITER });
+
+    expect(screen.queryByLabelText(/Bel Ami/)).toBeNull();
+    expect(screen.queryByText(ht['catalog.lifecycleChange'])).toBeNull();
+  });
+
+  it('offers it to somebody who holds catalog.deactivate', async () => {
+    await openCatalog(
+      { [CATALOG_ROUTE]: json([BEL_AMI]) },
+      { capabilities: ['catalog.read', 'catalog.deactivate'] },
+    );
+
+    const control = within(card('Bel Ami')).getByRole('combobox');
+    expect([...(control as HTMLSelectElement).options].map((option) => option.textContent)).toEqual(
+      [
+        ht['catalog.lifecycleChange'],
+        // Forward through the lifecycle, from ACTIVE.
+        ht['catalog.lifecycleMakeDiscontinued'],
+        ht['catalog.lifecycleMakeArchived'],
+      ],
+    );
+  });
+
+  it('offers archived merchandise one step back, and not straight to active', async () => {
+    // The server refuses `ARCHIVED → ACTIVE`: coming back into use and being
+    // restocked again are two decisions, so they are two steps.
+    await openCatalog(
+      { [CATALOG_ROUTE]: json([{ ...BEL_AMI, lifecycleStatus: 'ARCHIVED' }]) },
+      { capabilities: ['catalog.read', 'catalog.deactivate'] },
+    );
+
+    const control = within(card('Bel Ami')).getByRole('combobox');
+    expect([...(control as HTMLSelectElement).options].map((option) => option.textContent)).toEqual(
+      [ht['catalog.lifecycleChange'], ht['catalog.lifecycleMakeDiscontinued']],
+    );
   });
 });
 
-describe('the creation form', () => {
-  it('says the SKU comes from the server, and offers no field for it', async () => {
-    await openNewProduct();
+describe('on a phone', () => {
+  it('reads the same merchandise, reached through the More sheet', async () => {
+    // Products is not one of the everyday destinations the bottom bar carries,
+    // and the sheet behind More is the complete list of what somebody may open.
+    viewport('mobile');
+    mockApi({
+      'GET /api/auth/me': json(userResponse(userFixture({ capabilities: CATALOG_WRITER }))),
+      [CATALOG_ROUTE]: json([BEL_AMI]),
+    });
+    renderApp();
+    await screen.findByRole('button', { name: ht['nav.more'] });
+    fireEvent.click(screen.getByRole('button', { name: ht['nav.more'] }));
+    fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: ht['nav.products'] }),
+    );
+    await screen.findByRole('heading', { name: ht['catalog.title'] });
+    await settle();
 
-    const summary = screen.getByRole('complementary', { name: ht['catalog.preview'] });
-    expect(within(summary).getByText(ht['catalog.skuServerGenerated'])).toBeInTheDocument();
-    // The one identifier nobody on this screen chooses.
-    expect(screen.queryByLabelText(ht['catalog.sku'])).toBeNull();
-  });
-
-  it('warns that a repeat is a duplicate, because this request carries no operation id', async () => {
-    await openNewProduct();
-
-    expect(
-      within(screen.getByRole('complementary', { name: ht['catalog.preview'] })).getByText(
-        ht['catalog.noOperationId'],
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it('keeps removing a variant reachable by its own name, not just by a cross', async () => {
-    await openNewProduct();
-
-    // One variant to start with: nothing to remove yet.
-    expect(
-      screen.queryByRole('button', { name: ht['catalog.removeVariant'].replace('{number}', '1') }),
-    ).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: ht['catalog.addVariant'] }));
-
-    for (const number of ['1', '2']) {
-      expect(
-        screen.getByRole('button', {
-          name: ht['catalog.removeVariant'].replace('{number}', number),
-        }),
-      ).toBeInTheDocument();
-    }
-  });
-
-  it('keeps the attribute remove control named, though it draws as a cross', async () => {
-    await openNewProduct();
-    fireEvent.click(screen.getByRole('button', { name: ht['catalog.addAttribute'] }));
-
-    expect(screen.getByRole('button', { name: ht['catalog.removeAttribute'] })).toBeInTheDocument();
+    const product = card('Bel Ami');
+    expect(within(product).getByText('Steve Madden')).toBeInTheDocument();
+    expect(within(product).getByText('EKN-AB12CD34')).toBeInTheDocument();
   });
 });

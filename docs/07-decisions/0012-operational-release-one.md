@@ -47,8 +47,8 @@ selling price; basic acquisition/reference cost where appropriate; current
 stock and location visibility; receiving; legitimate stock-out handling;
 movement and history visibility; safe corrections and reversals; basic physical
 count and discrepancy reconciliation; product lifecycle control; authentication
-and session handling; capability authorization; hosted production deployment;
-production data preservation.
+and session handling; capability authorization; installed local production
+deployment; production data preservation.
 
 **Named as post-OR1**, so that OR1 cannot absorb them: richer count approvals,
 blind counts, advanced approval thresholds, low-stock alerts, reorder targets,
@@ -93,3 +93,28 @@ not benefit from being able to use it without internet.
 - Accepted cost: deferring the host choice to PR 8 means the OCI tooling
   already built may end up unused. It was cheap, it is documented, and choosing
   a host before the acceptance gate exists would be choosing it blind.
+
+---
+
+## Amendment — 2026-09-15
+
+[ADR 13](0013-local-first-shop-installation.md) supersedes ADR 2 and sets the
+production target: Ekon Local v1, installed and running on the shop computer,
+with a bundled local PostgreSQL 16, both tiers bound to `127.0.0.1`, and no
+internet required to operate. OR1 is delivered as that installation, which is
+why the required capability above now reads **installed local production
+deployment** rather than hosted production deployment.
+
+Nothing else in this record changes. The OR1 gate, the post-OR1 list, and the
+PR 2–8 route stand as written; only what "deployed" means has moved. The host
+question the Decision defers to PR 8 is answered by ADR 13 instead — there is no
+host to choose — and the hosting budget it mentions is not needed for v1.
+
+Two documents this record links to have been archived and now live at
+`docs/06-operations/archive/deployment.md` and
+`docs/06-operations/archive/oci-zero-cost.md`. They are kept as the record of
+what the hosted staging deployment was and what the OCI tooling did; neither
+describes the plan of record any more. The last Consequence above — that the OCI
+tooling may end up unused — is what happened, and its backup and restore-drill
+scripts, now under `deploy/archive/oci/scripts/`, are the basis for the
+cross-platform backup commands ADR 13 requires.

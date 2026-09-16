@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { VariantStockBalance } from '@ekon/shared';
 import { useTranslator } from '../../i18n/index.js';
 import { formatVariantAttributes } from '../../lib/variants.js';
@@ -21,11 +22,27 @@ import { CELL, HEAD } from './tableStyles.js';
  * removes one of the two rows, and which has no counterpart in a response that
  * has no product grouping in it.
  *
- * The rows are not controls. There is no click, no menu, no checkbox, and
- * nothing here is editable — a balance is a projection of the ledger, and the
- * way to change it is to record a movement on the screen that exists for that.
+ * **The rows are still not controls.** A balance is a projection of the ledger
+ * and nothing in this table edits one. What the last column carries is a set of
+ * ways *out* of this screen — into this item's history, into a count of it,
+ * into a correction of its number — each of which is its own workflow with its
+ * own confirmation. The row itself is not clickable, there is no menu, and
+ * there is no checkbox.
  */
-export function InventoryTable({ balances }: { balances: readonly VariantStockBalance[] }) {
+export function InventoryTable({
+  balances,
+  renderActions,
+}: {
+  balances: readonly VariantStockBalance[];
+  /**
+   * What can be done about one line, if anything can.
+   *
+   * A render prop rather than a set of callbacks, so this component stays a
+   * presentation: it decides where the actions sit in the row and knows nothing
+   * about which of them a person may perform.
+   */
+  renderActions?: ((variant: VariantStockBalance) => ReactNode) | undefined;
+}) {
   const t = useTranslator();
 
   return (
@@ -57,6 +74,11 @@ export function InventoryTable({ balances }: { balances: readonly VariantStockBa
             <th scope="col" className={`${HEAD} w-[12%] text-right`}>
               {t('stock.total')}
             </th>
+            {renderActions !== undefined && (
+              <th scope="col" className={`${HEAD} w-[16%]`}>
+                <span className="sr-only">{t('stock.columnActions')}</span>
+              </th>
+            )}
           </tr>
         </thead>
 
@@ -107,6 +129,10 @@ export function InventoryTable({ balances }: { balances: readonly VariantStockBa
               <td className={`${CELL} tabular text-right text-base font-semibold text-ink`}>
                 {variant.totalQuantity}
               </td>
+
+              {/* Quiet, and last: the numbers are what somebody came for, and
+                  the actions are what they might do next. */}
+              {renderActions !== undefined && <td className={CELL}>{renderActions(variant)}</td>}
             </tr>
           ))}
         </tbody>

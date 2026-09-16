@@ -6,6 +6,7 @@ import { deferred, json } from '../helpers/fetchMock.js';
 import {
   addAttribute,
   addVariant,
+  fillMoney,
   createdProduct,
   createProductRequests,
   CREATE_PRODUCT_ROUTE,
@@ -49,37 +50,116 @@ describe('what the form sends', () => {
     expect(createProductRequestSchema.safeParse(sent).success).toBe(true);
   });
 
-  it('sends the attributes that were typed, as they were typed', async () => {
-    // Names and values are normalized by the catalog on arrival — trimmed, and
-    // lower-cased for identity. Doing any of that here as well would be the
-    // browser deciding something the server is the authority on.
+  it('sends the attribute name from the vocabulary and the value as typed', async () => {
+    // The name comes from `GET /api/catalog/metadata` — it is structure, and
+    // the catalog refuses one it has never heard of. The *value* is free
+    // display text, sent exactly as typed: the catalog normalizes it on
+    // arrival, and doing that here as well would be the browser deciding
+    // something the server is the authority on.
     const api = await openNewProduct({ [CREATE_PRODUCT_ROUTE]: CREATED });
 
     fillNewProductForm({ name: 'Diri' });
-    addAttribute(0, { name: 'Gwosè', value: '5 mamit' });
+    addAttribute(0, { name: 'size', value: '5 mamit' });
     submitNewProductForm();
     await screen.findByRole('status');
 
     expect(createProductRequests(api)[0]).toEqual({
       name: 'Diri',
       classifications: {},
-      variants: [{ attributes: { Gwosè: '5 mamit' }, barcodes: [] }],
+      variants: [{ attributes: { size: '5 mamit' }, barcodes: [] }],
     });
+  });
+
+  it('offers only attribute names the catalog has defined, and no way to type one', async () => {
+    // The rule this form exists to keep: a shop that could invent `colour`
+    // beside `color` could never report on either again, and the server would
+    // refuse the request anyway. So the control is a list, and what it lists is
+    // what the catalog defined.
+    await openNewProduct();
+    fireEvent.click(screen.getByRole('button', { name: ht['catalog.addAttribute'] }));
+
+    const names = screen.getByLabelText(ht['catalog.attributeName']);
+    expect(names.tagName).toBe('SELECT');
+    expect([...(names as HTMLSelectElement).options].map((option) => option.value)).toEqual([
+      '',
+      'color',
+      'size',
+      'width',
+    ]);
+  });
+
+  it('sends a brand, a classification, a price and a barcode when they are given', async () => {
+    const api = await openNewProduct({ [CREATE_PRODUCT_ROUTE]: CREATED });
+
+    fillNewProductForm({ name: 'Bel Ami' });
+    fireEvent.change(screen.getByLabelText(ht['catalog.brand']), {
+      target: { value: 'Steve Madden' },
+    });
+    fireEvent.change(screen.getByLabelText('Audience'), { target: { value: 'Fanm' } });
+    addAttribute(0, { name: 'color', value: 'Nwa' });
+    fillMoney('price', { amount: '7500.50', currency: 'htg' });
+    fireEvent.click(screen.getByRole('button', { name: ht['catalog.addBarcode'] }));
+    fireEvent.change(screen.getByLabelText(ht['catalog.barcode']), {
+      target: { value: '0123456789012' },
+    });
+    submitNewProductForm();
+    await screen.findByRole('status');
+
+    expect(createProductRequests(api)[0]).toEqual({
+      name: 'Bel Ami',
+      brand: 'Steve Madden',
+      classifications: { audience: 'Fanm' },
+      variants: [
+        {
+          attributes: { color: 'Nwa' },
+          // `7500.50` typed becomes 750050 minor units, by reading the digits
+          // as text — never by multiplying a float.
+          sellingPrice: { amountMinor: 750050, currency: 'HTG' },
+          barcodes: ['0123456789012'],
+        },
+      ],
+    });
+  });
+
+  it('omits a price nobody entered rather than sending a zero', async () => {
+    // `null` in the contract means "nobody has established one". A zero would
+    // mean the item is free, and a margin computed from it would be a lie with
+    // a number attached.
+    const api = await openNewProduct({ [CREATE_PRODUCT_ROUTE]: CREATED });
+
+    fillNewProductForm({ name: 'Diri' });
+    submitNewProductForm();
+    await screen.findByRole('status');
+
+    const [sent] = createProductRequests(api);
+    expect(sent?.variants).toEqual([{ attributes: {}, barcodes: [] }]);
+  });
+
+  it('refuses an amount with no currency, because half a price is not a price', async () => {
+    const api = await openNewProduct({ [CREATE_PRODUCT_ROUTE]: CREATED });
+
+    fillNewProductForm({ name: 'Diri' });
+    fillMoney('price', { amount: '7500', currency: '' });
+    submitNewProductForm();
+    await settle();
+
+    expect(createProductRequests(api)).toHaveLength(0);
+    expect(screen.getByText(ht['catalog.moneyIncomplete'])).toBeInTheDocument();
   });
 
   it('sends every variant that was added', async () => {
     const api = await openNewProduct({ [CREATE_PRODUCT_ROUTE]: CREATED });
 
     fillNewProductForm({ name: 'Diri' });
-    addAttribute(0, { name: 'gwosè', value: '5 mamit' });
+    addAttribute(0, { name: 'size', value: '5 mamit' });
     addVariant();
-    addAttribute(1, { name: 'gwosè', value: '10 mamit' });
+    addAttribute(1, { name: 'size', value: '10 mamit' });
     submitNewProductForm();
     await screen.findByRole('status');
 
     expect(createProductRequests(api)[0]?.variants).toEqual([
-      { attributes: { gwosè: '5 mamit' }, barcodes: [] },
-      { attributes: { gwosè: '10 mamit' }, barcodes: [] },
+      { attributes: { size: '5 mamit' }, barcodes: [] },
+      { attributes: { size: '10 mamit' }, barcodes: [] },
     ]);
   });
 
@@ -143,7 +223,7 @@ describe('what the server owns', () => {
     const api = await openNewProduct({ [CREATE_PRODUCT_ROUTE]: CREATED });
 
     fillNewProductForm();
-    addAttribute(0, { name: 'gwosè', value: '5 mamit' });
+    addAttribute(0, { name: 'size', value: '5 mamit' });
     submitNewProductForm();
     await screen.findByRole('status');
 
@@ -192,11 +272,10 @@ describe('what the form refuses before sending', () => {
     fillNewProductForm({ name: 'a'.repeat(PRODUCT_NAME_MAX_LENGTH + 1) });
     submitNewProductForm();
 
-    expect(
-      await screen.findByText(
-        ht['catalog.nameTooLong'].replace('{max}', String(PRODUCT_NAME_MAX_LENGTH)),
-      ),
-    ).toBeInTheDocument();
+    // A sentence, not a field that silently stopped accepting characters. The
+    // input carries no `maxLength` for exactly that reason: truncating tells
+    // somebody nothing about why their name is now shorter than they typed it.
+    expect(await screen.findByText(ht['catalog.nameTooLong'])).toBeInTheDocument();
     expect(api.to(CREATE_PRODUCT_ROUTE)).toHaveLength(0);
   });
 
@@ -204,36 +283,40 @@ describe('what the form refuses before sending', () => {
     const api = await openNewProduct();
 
     fillNewProductForm();
-    addAttribute(0, { name: 'gwosè', value: '  ' });
+    addAttribute(0, { name: 'size', value: '  ' });
     submitNewProductForm();
 
     expect(await screen.findByText(ht['catalog.attributeValueRequired'])).toBeInTheDocument();
     expect(api.to(CREATE_PRODUCT_ROUTE)).toHaveLength(0);
   });
 
-  it('refuses the same attribute twice in one variant', async () => {
-    // The one local rule that is not merely a faster round trip. Attributes
-    // cross the wire as a JSON object, so a repeated name would collapse into
-    // one key in the browser and the server would never learn the second was
-    // typed — the person would be told nothing and lose what they entered.
-    const api = await openNewProduct();
+  it('cannot offer the same attribute twice in one variant', async () => {
+    // Stronger than refusing it: the second row simply does not list a name the
+    // first one took. Attributes cross the wire as an object, so two rows with
+    // one name would collapse into a single key and the server would never
+    // learn the second existed — a form that made that impossible to express is
+    // better than one that catches it afterwards.
+    await openNewProduct();
 
-    fillNewProductForm();
-    addAttribute(0, { name: 'Gwosè', value: '5 mamit' });
-    addAttribute(0, { name: ' gwosè ', value: '10 mamit' });
-    submitNewProductForm();
+    fillNewProductForm({ name: 'Diri' });
+    addAttribute(0, { name: 'size', value: '5 mamit' });
+    fireEvent.click(screen.getByRole('button', { name: ht['catalog.addAttribute'] }));
 
-    expect(await screen.findByText(ht['catalog.duplicateAttribute'])).toBeInTheDocument();
-    expect(api.to(CREATE_PRODUCT_ROUTE)).toHaveLength(0);
+    const [, second] = screen.getAllByLabelText(ht['catalog.attributeName']);
+    expect([...(second as HTMLSelectElement).options].map((option) => option.value)).toEqual([
+      '',
+      'color',
+      'width',
+    ]);
   });
 
   it('refuses two variants that are the same item', async () => {
     const api = await openNewProduct();
 
     fillNewProductForm();
-    addAttribute(0, { name: 'gwosè', value: '5 mamit' });
+    addAttribute(0, { name: 'size', value: '5 mamit' });
     addVariant();
-    addAttribute(1, { name: 'GWOSÈ', value: '5 Mamit' });
+    addAttribute(1, { name: 'size', value: '5 Mamit' });
     submitNewProductForm();
 
     expect(await screen.findByText(ht['catalog.duplicateVariant'])).toBeInTheDocument();

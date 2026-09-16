@@ -25,10 +25,26 @@ import type { MessageKey } from '../i18n/index.js';
  * different acts, and somebody may hold any combination of them. Neither write
  * door opens on the read capability, and neither opens on the other's.
  *
- * `inventory.adjust` opens nothing here, deliberately. Recording that stock
- * left is what somebody at the counter does all day; correcting a balance that
- * was wrong is authority over the records themselves, and the screen for it
- * does not exist. A capability is not a destination.
+ * **Not every capability is a destination, and three deliberately are not.**
+ * `inventory.adjust`, `inventory.reverse` and `catalog.deactivate` open no
+ * entry here, because each is a *contextual action* on something a person is
+ * already looking at rather than a place they go:
+ *
+ *   - adjusting a quantity belongs to the row whose quantity is wrong, on
+ *     Inventory;
+ *   - reversing a movement belongs to that movement, in History;
+ *   - withdrawing merchandise belongs to that merchandise, on Products.
+ *
+ * A navigation entry per endpoint would be eight doors for what is, to the
+ * person at the counter, four jobs — and "Adjust" as a destination would invite
+ * somebody to reach for it *instead of* Remove, which is the one confusion the
+ * two capabilities exist to prevent.
+ *
+ * `inventory.count` is the same shape of rule read the other way: Counts *is* a
+ * destination, on `inventory.read`, because seeing what has been counted and
+ * what is still unexplained is inventory visibility. Recording a count and
+ * accepting a difference are the acts that need `inventory.count`, and they are
+ * gated on the screen rather than at the door.
  *
  * `identity.manage` opens one door and it is a narrow one: creating an account.
  * That is the whole of user management that exists, so it is the whole of what
@@ -40,14 +56,39 @@ import type { MessageKey } from '../i18n/index.js';
  * this only decides whether somebody is shown a door that will be shut in their
  * face.
  */
-export type View = 'home' | 'catalog' | 'inventory' | 'receiving' | 'removal' | 'newUser';
+export type View =
+  'home' | 'inventory' | 'receiving' | 'removal' | 'counts' | 'history' | 'catalog' | 'newUser';
 
 /**
- * Two groups, because the sidebar reads better as two short lists than as one
- * long one: what somebody does with stock during a shift, and what somebody
- * sets up around it.
+ * Where to go, and — for the two screens that can be opened *about* something —
+ * what to open it about.
+ *
+ * An inventory row offers "see this item's history", and the honest way to
+ * answer that is to open History already filtered to it rather than to drop
+ * somebody on an unfiltered feed and ask them to find it again. The focus is a
+ * hint the destination applies to its own filters; it is not routing state and
+ * nothing depends on it being present.
  */
-export type NavigationGroupId = 'operations' | 'management';
+export interface ViewFocus {
+  variantId?: string;
+  locationId?: string;
+}
+
+/**
+ * Three groups, because the sidebar reads better as three short lists than as
+ * one long one, and because the three answer genuinely different questions:
+ *
+ *   operations  what somebody does with stock during a shift;
+ *   control     how somebody checks that the records are right;
+ *   management  what somebody sets up around all of it.
+ *
+ * Counts and History sit in `control` rather than in `operations` for a reason
+ * worth stating: neither is part of serving a customer. One is an audit of the
+ * records against the shelf and the other is the evidence of what changed them,
+ * and putting them beside Receive and Remove would suggest they are things to
+ * do all day.
+ */
+export type NavigationGroupId = 'operations' | 'control' | 'management';
 
 export interface NavigationItem {
   view: View;
@@ -103,6 +144,20 @@ export const NAVIGATION: readonly NavigationItem[] = [
     everyday: true,
   },
   {
+    view: 'counts',
+    labelKey: 'nav.counts',
+    descriptionKey: 'nav.countsPurpose',
+    capability: 'inventory.read',
+    group: 'control',
+  },
+  {
+    view: 'history',
+    labelKey: 'nav.history',
+    descriptionKey: 'nav.historyPurpose',
+    capability: 'inventory.read',
+    group: 'control',
+  },
+  {
     view: 'catalog',
     labelKey: 'nav.products',
     descriptionKey: 'nav.productsPurpose',
@@ -120,11 +175,12 @@ export const NAVIGATION: readonly NavigationItem[] = [
 
 const GROUP_LABEL_KEYS: Readonly<Record<NavigationGroupId, MessageKey>> = {
   operations: 'nav.groupOperations',
+  control: 'nav.groupControl',
   management: 'nav.groupManagement',
 };
 
 /** The order groups appear in, everywhere they appear. */
-const GROUP_ORDER: readonly NavigationGroupId[] = ['operations', 'management'];
+const GROUP_ORDER: readonly NavigationGroupId[] = ['operations', 'control', 'management'];
 
 export interface NavigationGroup {
   id: NavigationGroupId;
@@ -159,6 +215,12 @@ export function navigationGroups(available: readonly NavigationItem[]): readonly
 /**
  * The permitted destinations that earn a slot in the mobile bottom bar and the
  * tablet rail. A subset of what a person may open, never a superset.
+ *
+ * It stays at three — Inventory, Receive, Remove — now that there are eight
+ * destinations rather than six. A bar with room for four including "More" is
+ * not a table of contents, and Counts and History are opened a few times a week
+ * by somebody who has a minute, not between customers. They are one tap away
+ * behind More, which is where everything a person may open is listed in full.
  */
 export function everydayNavigation(
   available: readonly NavigationItem[],

@@ -1,5 +1,16 @@
 # Northflank + Supabase staging
 
+> **Archived — 2026-09-15.** This document recorded the concrete hosted staging
+> deployment — the application on Northflank, its PostgreSQL on Supabase — that
+> proved the operating loop end to end. That environment is gone and this
+> procedure is not followed.
+> [ADR 13](../../07-decisions/0013-local-first-shop-installation.md) supersedes
+> [ADR 2](../../07-decisions/0002-cloud-hosted-not-shop-local.md): production is
+> now **Ekon Local v1**, installed on the shop computer with a bundled local
+> PostgreSQL 16, both tiers bound to `127.0.0.1` and no internet required. It is
+> kept, unedited apart from link paths, as the record of what was deployed and
+> how it was configured.
+
 This is the concrete hosted staging deployment for Ekon, and it is the one that
 has actually been exercised end to end. The generic, provider-neutral procedure
 lives in [deployment.md](deployment.md); this document only records how that

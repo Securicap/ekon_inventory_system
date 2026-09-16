@@ -108,6 +108,18 @@ export const api = {
     request<T>('POST', path, { body, operationId }),
 
   /**
+   * `PATCH`, for the one thing in this application that modifies a resource in
+   * place rather than appending to a ledger: merchandise lifecycle.
+   *
+   * No operation id, and it needs none. A lifecycle change is a *declarative
+   * state assignment* — the body says what the merchandise should be, so
+   * sending it twice leaves exactly what sending it once left, and the route
+   * writes no `operations` row for a header to name. Ledger commands are
+   * `post`, which requires one.
+   */
+  patch: <T>(path: string, body: unknown): Promise<T> => request<T>('PATCH', path, { body }),
+
+  /**
    * A POST that is deliberately not a ledger command: signing in, signing out,
    * and creating a user account.
    *

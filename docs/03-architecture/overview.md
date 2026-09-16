@@ -14,31 +14,37 @@ ledger guarantees below are unchanged by it.
 ## Shape
 
 ```
-   shop laptop (browser)   ──┐
-   shared, also used for      │
-   unrelated work             │      ┌──────────────────────────┐
-                              ├─────▶│  one web service         │
-   owner, another country   ──┘      │  Fastify + React         │
-   (laptop or phone)                 │  same origin, one deploy │
-                                     └────────────┬─────────────┘
-                                                  │
-                                     ┌────────────▼─────────────┐
-                                     │  managed PostgreSQL 16   │
-                                     │  daily backup + PITR     │
-                                     └────────────┬─────────────┘
-                                                  │ weekly pg_dump
-                                                  ▼
-                                        object storage (independent copy)
+   the shop computer
+   ┌────────────────────────────────────────────────────────┐
+   │                                                        │
+   │   browser ─────────▶ ┌──────────────────────────┐      │
+   │   127.0.0.1          │  one web service         │      │
+   │                      │  Fastify + React         │      │
+   │                      │  same origin, one deploy │      │
+   │                      └────────────┬─────────────┘      │
+   │                                   │                    │
+   │                      ┌────────────▼─────────────┐      │
+   │                      │  PostgreSQL 16           │      │
+   │                      │  local, bundled          │      │
+   │                      │  127.0.0.1:5432          │      │
+   │                      └────────────┬─────────────┘      │
+   │                                   │ scheduled pg_dump  │
+   └───────────────────────────────────┼────────────────────┘
+                                       ▼
+                            a backup copy off the machine
 ```
 
-The shop laptop is a client. It runs no server, no database, and no installed
-software beyond a browser.
+The shop computer is the server. Nothing Ekon installs listens outside the
+loopback interface, and no workflow needs the internet — see
+[ADR 13](../07-decisions/0013-local-first-shop-installation.md), which supersedes
+[ADR 2](../07-decisions/0002-cloud-hosted-not-shop-local.md). Because there is no
+provider taking snapshots, backup and restore are part of the product.
 
 ## Why one origin
 
-The backend serves the built frontend from `backend/public`. One deployment, one
-TLS certificate, no CORS configuration, no cookie-domain problems. The frontend
-always calls relative `/api/...` paths; in development Vite proxies them.
+The backend serves the built frontend from `backend/public`. One deployment, no
+CORS configuration, no cookie-domain problems. The frontend always calls
+relative `/api/...` paths; in development Vite proxies them.
 
 ## What the browser holds
 
@@ -82,7 +88,7 @@ Deliberately, in the database rather than in application code:
 
 | Guarantee                                             | Mechanism                                                                      |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Movements are never edited or deleted                 | Triggers + a role granted only `SELECT, INSERT`                                |
+| Movements are never edited or deleted                 | Triggers; a role granted only `SELECT, INSERT` is planned (Phase 1)            |
 | Before/after quantities are arithmetically consistent | `CHECK (quantity_after = quantity_before + quantity_delta)`                    |
 | History cannot fork under concurrency                 | `previous_movement_id UNIQUE` + partial unique index + `SELECT ... FOR UPDATE` |
 | A command applies at most once                        | `operations.id` primary key                                                    |
@@ -93,19 +99,19 @@ Application code can have bugs. These cannot be bypassed by one.
 
 ## Single writer, total order
 
-There is one database and one application tier, so the ledger has a total order
-by construction. No conflict resolution exists anywhere in this system, and none
-is needed.
+There is one database and one application tier, on one computer, so the ledger
+has a total order by construction. No conflict resolution exists anywhere in
+this system, and none is needed.
 
-**This is an assumption the offline milestone must revisit.** Because movements
-record `quantity_before`/`quantity_after` and link to a predecessor, the ledger
-is order-dependent. A movement queued on a client carries a delta only; the
-server assigns its chain position at ingestion. See `docs/07-decisions/0004`.
-Movement ids and `recorded_at` are assigned there too — ids are still generated
-in application code rather than by the database, but by the server's, not the
-browser's. If the offline milestone needs a client-side event identity, it gets
-one through a synchronization envelope designed and reviewed on its own, not by
-widening the posting command.
+**This is an assumption a future synchronization milestone must revisit.**
+Because movements record `quantity_before`/`quantity_after` and link to a
+predecessor, the ledger is order-dependent. A movement arriving from elsewhere
+carries a delta only; the server assigns its chain position at ingestion. See
+`docs/07-decisions/0004`. Movement ids and `recorded_at` are assigned there too
+— ids are still generated in application code rather than by the database, but
+by the server's, not the browser's. If that milestone needs a client-side event
+identity, it gets one through a synchronization envelope designed and reviewed
+on its own, not by widening the posting command.
 
 ## Request lifecycle for a state-changing command
 

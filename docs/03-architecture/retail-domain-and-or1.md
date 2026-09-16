@@ -348,14 +348,17 @@ which the shop stops keeping its stock somewhere else.
 
 ### OR1 is not the staging launch invariant
 
-Hosted staging has passed its launch invariant — sign in, create accounts,
-create a product, receive it, see it, remove it, sign out, all through
-supported workflows. That happened, it is real, and it is recorded in
-[deployment.md](../06-operations/deployment.md#the-launch-invariant).
+Hosted staging passed its launch invariant — sign in, create accounts, create a
+product, receive it, see it, remove it, sign out, all through supported
+workflows. That happened, it is real, and it is recorded in the archived
+[deployment.md](../06-operations/archive/deployment.md#the-launch-invariant).
 
 **It proved the earlier operating loop against the earlier product model.** It
 does not carry over to the redesigned merchandise and inventory product, which
-does not exist yet. OR1 has its own, broader acceptance gate.
+does not exist yet. OR1 has its own, broader acceptance gate. It was also proved
+on a deployment target that no longer applies — production is now an
+installation on the shop computer
+([ADR 13](../07-decisions/0013-local-first-shop-installation.md)).
 
 ### Production data becomes durable business data
 
@@ -389,7 +392,7 @@ The minimum. Not the roadmap.
 - product lifecycle control;
 - authentication and session handling;
 - capability authorization;
-- hosted production deployment;
+- installed local production deployment;
 - production data preservation.
 
 ### Explicitly post-OR1
@@ -426,23 +429,30 @@ screens are a temporary shell over the current model; redrawing them before the
 merchandise model is right would produce a second shell. The current UI is not
 redesigned in this PR and PR 7 is not designed here.
 
-Offline operation, described in [README.md](../../README.md) and
+Offline operation was described in
 [ADR 2](../07-decisions/0002-cloud-hosted-not-shop-local.md) as the next major
-milestone, sits after this sequence. Those documents recorded the ordering that
-was true when the system was a stock counter; the merchandise correction and
-OR1 now come first. The ADRs are not rewritten — nothing about _how_ offline
-would work has changed, only when it happens.
+milestone, after this sequence. That ordering was true when the database lived
+somewhere else.
+[ADR 13](../07-decisions/0013-local-first-shop-installation.md) supersedes ADR 2:
+the data is on the shop's computer, so the shop already works with the
+connection down and there is nothing to queue against. What remains for a later
+milestone is synchronization — a copy the owner can read from abroad.
 
 ---
 
-## Hosting
+## Where OR1 runs
 
-**OR1 does not depend on any particular host, and it does not depend on
-zero-cost infrastructure.** Roughly $20 has been set aside for hosting, so a
-paid managed platform is a legitimate OR1 choice.
+**OR1 is delivered as Ekon Local v1: an installation on the shop computer.** The
+application and a bundled PostgreSQL 16 both run there, both bound to
+`127.0.0.1`, and no workflow needs the internet. Backup, restore, and
+data-preserving upgrades are release requirements rather than a provider's job.
+That is decided in
+[ADR 13](../07-decisions/0013-local-first-shop-installation.md), which supersedes
+the cloud-hosted direction of
+[ADR 2](../07-decisions/0002-cloud-hosted-not-shop-local.md).
 
-The Oracle Cloud Always Free runbook in
-[oci-zero-cost.md](../06-operations/oci-zero-cost.md) remains a valid optional
-infrastructure candidate, with real tooling behind it. It is one option, not
-the plan of record. **The OR1 host is chosen in PR 8**, against the acceptance
-gate and the budget, not here.
+There is therefore no host to choose and no hosting budget to spend for v1. The
+hosted tooling built earlier — the Oracle Cloud runbook and its scripts, the
+staging notes — is archived under `docs/06-operations/archive/` and
+`deploy/archive/`. Hosted deployment stays possible as a later decision; it is
+not what OR1 ships.

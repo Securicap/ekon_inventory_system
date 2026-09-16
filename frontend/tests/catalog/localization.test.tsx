@@ -63,7 +63,6 @@ describe('localization', () => {
   it('keeps the placeholders a message promises', () => {
     for (const [key, placeholder] of [
       ['catalog.variantNumber', '{number}'],
-      ['catalog.removeVariant', '{number}'],
       ['catalog.created', '{name}'],
       ['catalog.createdHint', '{skus}'],
       ['catalog.nameTooLong', '{max}'],

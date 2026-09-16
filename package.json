@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Offline-ready inventory system for a small family retail business. Cloud-hosted, browser-based, append-only inventory ledger.",
+  "description": "Inventory system for a small family retail business. Installed on the shop computer, browser-based, local PostgreSQL, append-only inventory ledger.",
   "engines": {
     "node": ">=22 <23"
   },

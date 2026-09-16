@@ -1,5 +1,18 @@
 # OCI zero-cost production candidate
 
+> **Archived — 2026-09-15.** This runbook described a cloud-hosted production
+> _candidate_ — Ekon on one Oracle Cloud Always Free VM — that was never made
+> live. It is not the plan of record and no part of it is followed:
+> [ADR 13](../../07-decisions/0013-local-first-shop-installation.md) supersedes
+> [ADR 2](../../07-decisions/0002-cloud-hosted-not-shop-local.md) and makes
+> **Ekon Local v1** — installed on the shop computer, with a bundled local
+> PostgreSQL 16, both tiers bound to `127.0.0.1`, working with no internet — the
+> production target. The tooling it drives now lives under
+> [`deploy/archive/oci/`](../../../deploy/archive/oci/); the paths and commands
+> below are left exactly as they were written for that VM. Its backup and
+> restore-drill sections are worth reading: they are the basis for the
+> cross-platform backup and restore commands built in Phase 1.
+
 The canonical runbook for running Ekon on a single Oracle Cloud Infrastructure
 Always Free VM: Caddy in front, the application behind it, PostgreSQL on an
 attached block volume, and a nightly backup that leaves the machine.
@@ -12,7 +25,7 @@ seen to work, the business's inventory would exist in exactly one place.
 
 **It is one optional infrastructure candidate, not the plan of record.** OR1 —
 the milestone at which Ekon becomes the store's real system, defined in
-[retail-domain-and-or1.md](../03-architecture/retail-domain-and-or1.md) — does
+[retail-domain-and-or1.md](../../03-architecture/retail-domain-and-or1.md) — does
 not depend on Oracle Cloud or on zero-cost infrastructure at all. Roughly $20 is
 available for hosting, so a paid managed platform is an equally legitimate
 option, and the OR1 host is chosen in PR 8. The checklist below is

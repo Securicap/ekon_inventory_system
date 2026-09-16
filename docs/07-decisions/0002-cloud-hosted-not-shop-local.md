@@ -1,6 +1,7 @@
 # 2. Cloud-hosted application; the shop laptop is a client only
 
-**Status:** Accepted — 2026-08-02
+**Status:** Superseded by [ADR 13](0013-local-first-shop-installation.md)
+— 2026-09-15. Accepted 2026-08-02.
 **Supersedes:** an earlier proposal to run a server on the shop laptop
 
 ## Context
