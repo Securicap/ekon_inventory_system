@@ -121,6 +121,126 @@ jobs:
       - name: Tests
         run: npm run test
 
+  windows-layout:
+    name: Windows application layout
+    runs-on: windows-latest
+    # The one job that has to run on Windows, and the reason is the layout it
+    # produces rather than the build itself: npm selects native binaries by the
+    # platform it is running on, and `@node-rs/argon2` is the difference between
+    # an installation where somebody can sign in and one where they cannot. The
+    # script forces `--os=win32 --cpu=x64` so a Linux build is correct too, but
+    # this is where that claim is actually tested.
+    #
+    # It produces a directory tree and nothing that runs: there is no installer
+    # to put it through yet, so the artifact is the deliverable. Download it and
+    # look at it.
+    #
+    # This is the slow job — it downloads and assembles about 230 MB — and it
+    # runs alongside the others rather than after them, so it does not hold up
+    # the feedback that a developer is actually waiting for.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `git describe` is what names the build in version.json, and it needs
+          # tags. A shallow clone would silently fall back to the workspace
+          # version on every build.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Cache the pinned Node and PostgreSQL archives
+        # Roughly 350 MB that changes only when versions.json does, which is why
+        # that file is the cache key. The script verifies every cached file
+        # against its pinned sha256 before using it, so a poisoned or truncated
+        # cache entry is caught rather than built into the product.
+        uses: actions/cache@v4
+        with:
+          path: .cache/windows-artifacts
+          key: windows-artifacts-${{ hashFiles('scripts/windows/versions.json') }}
+
+      - run: npm ci
+
+      - name: Assemble dist-windows/
+        # Builds every workspace, downloads and verifies both pinned artifacts,
+        # and assembles the tree.
+        run: node scripts/windows/build-layout.mjs
+
+      - name: Show what was assembled
+        shell: pwsh
+        run: |
+          Get-Content dist-windows/app/version.json
+          Get-Content dist-windows/app/package.json
+          Get-ChildItem dist-windows/app | Select-Object Mode, Length, Name
+          Get-ChildItem dist-windows/pgsql | Select-Object Mode, Name
+
+      - name: The layout is what the next phase will expect
+        # A handful of assertions about the tree rather than about the script.
+        # Every one of them is something a later phase depends on existing at
+        # exactly this path, and each would otherwise be discovered by an
+        # installer on somebody's machine.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'dist-windows/app/node.exe',
+            'dist-windows/app/package.json',
+            'dist-windows/app/version.json',
+            'dist-windows/app/dist/main.js',
+            'dist-windows/app/dist/cli/ekonctl.js',
+            'dist-windows/app/public/index.html',
+            'dist-windows/app/migrations/0001_extensions_and_conventions.sql',
+            'dist-windows/app/node_modules/fastify/package.json',
+            'dist-windows/app/node_modules/@ekon/shared/dist/index.js',
+            'dist-windows/app/node_modules/@node-rs/argon2-win32-x64-msvc/package.json',
+            'dist-windows/pgsql/bin/postgres.exe',
+            'dist-windows/pgsql/bin/initdb.exe',
+            'dist-windows/pgsql/bin/pg_dump.exe',
+            'dist-windows/pgsql/bin/psql.exe',
+            'dist-windows/pgsql/lib/libpq.dll'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "missing: $file" }
+          }
+
+          # The bundled runtime is the interpreter and nothing else. A package
+          # manager on a machine with no internet, sitting next to the
+          # business's records, buys nothing.
+          if (Test-Path 'dist-windows/app/npm.cmd') { throw 'npm was bundled; it should not be' }
+
+          # version.json is read at boot through EKON_VERSION_FILE, and the
+          # schema that reads it is strict.
+          $version = Get-Content dist-windows/app/version.json | ConvertFrom-Json
+          if ($version.schemaVersion -notmatch '^\d{4}$') { throw 'schemaVersion is not NNNN' }
+          # Restated here on purpose: the script derives this from versions.json,
+          # and a test that derived it the same way would assert nothing. When
+          # PostgreSQL is bumped, this fails and somebody updates it deliberately.
+          if ($version.pgMajor -ne 16) {
+            throw "pgMajor is $($version.pgMajor), not 16. If that is a deliberate bump, update this check."
+          }
+          if ([string]::IsNullOrWhiteSpace($version.appVersion)) { throw 'appVersion is empty' }
+
+          # The migration the layout pins must be one the layout carries.
+          $head = Get-ChildItem dist-windows/app/migrations -Filter '*.sql' |
+            ForEach-Object { $_.Name.Substring(0, 4) } | Sort-Object | Select-Object -Last 1
+          if ($version.schemaVersion -ne $head) {
+            throw "version.json pins $($version.schemaVersion) but the layout carries $head"
+          }
+
+          Write-Host 'The layout is complete and internally consistent.'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-layout
+          path: dist-windows/
+          # An empty upload would be a green job with nothing behind it. The
+          # assertions above should have caught that already; this is the
+          # backstop that costs nothing.
+          if-no-files-found: error
+          retention-days: 7
+
   build:
     name: Build and bundle budget
     runs-on: ubuntu-latest

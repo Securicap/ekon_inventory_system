@@ -17,8 +17,11 @@ import { z } from 'zod';
  * a build it is a different build.
  *
  * ```json
- * { "appVersion": "1.4.0", "schemaVersion": "0015" }
+ * { "appVersion": "1.4.0", "schemaVersion": "0015", "pgMajor": 16 }
  * ```
+ *
+ * Written by `scripts/windows/build-layout.mjs`, which derives every field from
+ * the artifact it is assembling rather than from anything written down twice.
  */
 export const versionFileSchema = z
   .object({
@@ -32,6 +35,26 @@ export const versionFileSchema = z
       .string()
       .trim()
       .regex(/^\d{4}$/, 'schemaVersion must be a four-digit migration version, for example 0015'),
+    /**
+     * The major version of the PostgreSQL the installer bundled.
+     *
+     * **The application does not act on it**, and deliberately does not: which
+     * server the cluster is running is the server's business, and a build that
+     * refused to start because it disagreed would be inventing a second opinion
+     * about a fact it can read from the connection.
+     *
+     * It is here because the file is the artifact's identity, and the identity
+     * of an installed product includes which database it brought with it. An
+     * upgrade has to know whether the cluster in `ProgramData` needs a major
+     * upgrade before the new build touches it, and a support conversation
+     * should not have to guess it from the contents of `pgsql\bin`.
+     * `ekon-ctl diagnostics` copies this file into the bundle verbatim.
+     *
+     * Optional because a hosted deployment bundles no PostgreSQL at all, and a
+     * container that had to state a major version it does not own would be
+     * stating a fiction.
+     */
+    pgMajor: z.number().int().min(1).optional(),
   })
   .strict();
 

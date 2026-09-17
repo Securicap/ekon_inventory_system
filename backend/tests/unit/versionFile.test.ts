@@ -54,6 +54,23 @@ describe('readVersionFile', () => {
     expect(() => readVersionFile(file)).toThrow(/appVersion/);
   });
 
+  it('accepts the PostgreSQL major the Windows layout records', () => {
+    // `scripts/windows/build-layout.mjs` writes it. The application does not act
+    // on it — the installer and a support conversation do — but the file is read
+    // with a strict schema, so an unknown field there is a refusal to boot.
+    const file = write('pg.json', '{"appVersion":"1.4.0","schemaVersion":"0015","pgMajor":16}');
+    expect(readVersionFile(file)).toEqual({
+      appVersion: '1.4.0',
+      schemaVersion: '0015',
+      pgMajor: 16,
+    });
+  });
+
+  it('does not require it, because a hosted deployment bundles no database', () => {
+    const file = write('no-pg.json', '{"appVersion":"1.4.0","schemaVersion":"0015"}');
+    expect(readVersionFile(file).pgMajor).toBeUndefined();
+  });
+
   it('refuses a field nobody put there on purpose', () => {
     // Strict: a file carrying `schema_version` alongside `schemaVersion` is two
     // claims about one fact, and the one that is ignored is the one somebody

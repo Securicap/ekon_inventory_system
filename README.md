@@ -198,6 +198,7 @@ country, is a later milestone; it is not in v1.
 | `backend/src/cli/`    | `ekon-ctl` — migrate, backup, restore, restore drill, diagnostics           |
 | `infrastructure/`     | Local development Docker compose                                            |
 | `scripts/`            | Convention and bundle-budget checks                                         |
+| `scripts/windows/`    | Assembles the Windows layout: bundled Node and PostgreSQL, pinned           |
 | `docs/`               | Architecture, database, operations, decision records                        |
 
 The backend is a **modular monolith**: one process, one deployment, with

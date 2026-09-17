@@ -1,0 +1,15 @@
+# Build output and vendored artifacts.
+#
+# `dist-windows/` is the assembled Windows layout: a bundled Node runtime, a
+# PostgreSQL distribution, and this repository's own compiled output. `.cache/`
+# holds the pinned archives it unpacks. None of it is source, and formatting a
+# minified bundle is neither possible nor useful.
+dist-windows/
+.cache/
+
+# Already covered by .gitignore, restated here because Prettier does not read it
+# for directories it is pointed at explicitly.
+node_modules/
+**/dist/
+backend/public/
+coverage/
