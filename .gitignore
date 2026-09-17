@@ -6,6 +6,13 @@ dist/
 backend/public/
 *.tsbuildinfo
 
+# the assembled Windows application layout, and the pinned artifacts it unpacks.
+# Both are build output: `scripts/windows/build-layout.mjs` rebuilds the tree
+# from scratch every run, and the cache is a few hundred megabytes of Node and
+# PostgreSQL zips that are pinned by checksum in versions.json anyway.
+dist-windows/
+.cache/
+
 # environment — never commit real credentials
 .env
 .env.*

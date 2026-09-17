@@ -12,6 +12,12 @@ export default tseslint.config(
       'backend/public/**',
       '**/coverage/**',
       '**/*.config.js',
+      // The assembled Windows layout and the artifacts it unpacks. Build
+      // output, a bundled Node runtime, and a PostgreSQL distribution — none of
+      // it is this repository's source, and linting a minified bundle produces
+      // several thousand findings about somebody else's code.
+      'dist-windows/**',
+      '.cache/**',
     ],
   },
 
@@ -122,7 +128,15 @@ export default tseslint.config(
   {
     files: ['scripts/**/*.mjs'],
     languageOptions: {
-      globals: { console: 'readonly', process: 'readonly' },
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        // The Windows layout build downloads its pinned artifacts. `fetch` is a
+        // global in Node 22 with no `node:` module to import it from; every
+        // other Node API these scripts use is imported explicitly.
+        fetch: 'readonly',
+        URL: 'readonly',
+      },
     },
     rules: {
       'no-console': 'off',
